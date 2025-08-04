@@ -1,0 +1,229 @@
+/* Navbar base */
+.navbar {
+  width: 100%;
+  padding: 8px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(18, 18, 35, 0.95);
+  color: #fff;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  gap: 12px;
+  flex-wrap: wrap;
+  box-sizing: border-box;
+  position: relative;
+  z-index: 50;
+}
+
+.navbar-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+  min-width: 0;
+  position: relative;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 1.4rem;
+  letter-spacing: 1px;
+  background: linear-gradient(90deg, #8c5aff, #ff71ce);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  flex-shrink: 0;
+}
+
+.mobile-menu-toggle {
+  display: none;
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  padding: 6px;
+  border-radius: 6px;
+  transition: background .2s;
+}
+.mobile-menu-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.nav-btn {
+  background: transparent;
+  border: none;
+  color: #ddd;
+  padding: 8px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  position: relative;
+  transition: background .2s;
+}
+.nav-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* hide any legacy left-side balance if present */
+.balance-display {
+  display: none;
+}
+
+/* right side */
+.navbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.connect-btn,
+.disconnect-btn {
+  background: #7c5aff;
+  border: none;
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+  transition: filter .2s;
+  white-space: nowrap;
+}
+.connect-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.connect-btn:hover,
+.disconnect-btn:hover {
+  filter: brightness(1.1);
+}
+
+.wallet-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.addr-badge {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.token-badge {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.navbar-error {
+  width: 100%;
+  margin-top: 4px;
+  color: #ff6b6b;
+  font-size: 0.75rem;
+  text-align: center;
+}
+
+/* Mobile dropdown wallet inside menu */
+.mobile-wallet-block {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-top: 12px;
+}
+
+.wallet-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.addr-badge.small {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  letter-spacing: 0.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.token-badge.small {
+  background: rgba(255, 255, 255, 0.1);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.connect-btn.mobile,
+.disconnect-btn.mobile {
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 12px;
+}
+
+/* mobile adjustments */
+@media (max-width: 920px) {
+  .mobile-menu-toggle {
+    display: block;
+  }
+
+  .nav-links {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: rgba(24, 24, 40, 0.97);
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 16px;
+    border-radius: 0 0 12px 12px;
+    transform: translateY(-8px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .25s ease, transform .25s ease;
+    z-index: 45;
+  }
+  .nav-links.open {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+  .nav-btn {
+    width: 100%;
+    text-align: left;
+    padding: 10px 14px;
+    font-size: 1rem;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 8px;
+  }
+  .navbar {
+    padding: 12px 16px;
+  }
+}

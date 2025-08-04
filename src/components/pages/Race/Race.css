@@ -1,0 +1,487 @@
+.race-stage {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 0;
+  background: #000;
+  color: #fff;
+  box-sizing: border-box;
+  font-family: system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+}
+
+/* spacer if you use navbar overlaying */
+.content-below-navbar {
+  margin-top: 56px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.race-box-wrapper {
+  position: relative;
+  width: 100%;
+  display: flex;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
+.race-box {
+  position: relative;
+  width: 100%;
+  height: 60vh;
+  min-height: 220px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: rgba(24, 24, 40, 0.15);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  scrollbar-color: #7c5aff #222;
+  scrollbar-width: thin;
+}
+.race-box::-webkit-scrollbar {
+  height: 12px;
+}
+.race-box::-webkit-scrollbar-thumb {
+  background: #7c5aff;
+  border-radius: 8px;
+}
+.race-box::-webkit-scrollbar-track {
+  background: #181828;
+  border-radius: 8px;
+}
+
+.race-inner {
+  position: relative;
+  width: 100%;
+  max-width: 2400px;
+  flex: 1;
+  height: 100%;
+  min-width: 1000px; /* allow horizontal scroll on smaller tablets but prevent collapse */
+}
+
+.lane-labels {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 10;
+  pointer-events: none;
+}
+.lane-label {
+  position: absolute;
+  width: 180px;
+  text-align: center;
+  font-size: clamp(14px, 1.2vw, 22px);
+  color: #fff;
+  font-weight: 700;
+  text-shadow: 1px 1px 8px #111, 0 0 2px #000;
+  opacity: 0.95;
+  letter-spacing: 1px;
+  pointer-events: none;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  user-select: none;
+}
+
+.race-canvas {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  z-index: 20;
+  display: block;
+  background: transparent;
+}
+
+/* overlays */
+.dim-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 30;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.winner-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.winner-box {
+  background: rgba(0, 0, 0, 0.92);
+  padding: 24px 36px;
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  min-width: 260px;
+  text-align: center;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.7);
+}
+.winner-box h1 {
+  margin: 0;
+  font-size: 32px;
+  letter-spacing: 1px;
+}
+.subtitle {
+  font-size: 14px;
+  color: #ccc;
+}
+
+/* betting + history wrapper */
+.bet-history-wrapper {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 8px;
+  box-sizing: border-box;
+  gap: 16px;
+  padding: 0 4vw;
+  flex-wrap: wrap;
+}
+
+/* betting panel */
+.betting-panel {
+  flex: 1 1 600px;
+  background: rgba(24, 24, 40, 0.95);
+  border: 2px solid #555;
+  border-radius: 12px;
+  padding: 12px 16px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* history box */
+.history-box {
+  flex: 0 0 320px;
+  max-width: 100%;
+  background: rgba(24, 24, 40, 0.95);
+  border: 2px solid #555;
+  border-radius: 12px;
+  padding: 12px 16px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #fff;
+  font-size: 13px;
+  margin: 0;
+}
+
+.history-header {
+  font-weight: bold;
+  font-size: 16px;
+  margin-bottom: 4px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.history-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 4px;
+  max-height: calc(4 * 52px + 3 * 6px);
+  position: relative;
+}
+.history-list {
+  scrollbar-width: none;
+}
+.history-list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.history-empty {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.history-item {
+  background: rgba(40, 40, 70, 0.9);
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.history-time {
+  flex: 0 0 60px;
+  color: #aaa;
+}
+
+.history-winner {
+  flex: 1;
+  font-weight: 600;
+}
+
+.history-multiplier {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 12px;
+  background: rgba(36, 36, 58, 0.9);
+  border: 1px solid #444;
+  color: #fff;
+}
+.history-multiplier.multiplier-x2 {
+  border-color: #4fb5ff;
+  color: #4fb5ff;
+}
+.history-multiplier.multiplier-x3 {
+  border-color: #ff7171;
+  color: #ff7171;
+}
+.history-multiplier.multiplier-x4 {
+  border-color: #bb35ff;
+  color: #bb35ff;
+}
+.history-multiplier.multiplier-x5 {
+  border-color: #ffb84d;
+  color: #ffb84d;
+}
+
+/* bet header & grid */
+.bet-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.countdown {
+  font-weight: bold;
+}
+
+.bet-grid {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  justify-content: flex-start;
+}
+.bet-grid::-webkit-scrollbar {
+  height: 10px;
+}
+.bet-grid::-webkit-scrollbar-thumb {
+  background: #6e53ff;
+  border-radius: 6px;
+}
+.bet-grid::-webkit-scrollbar-track {
+  background: rgba(24,24,40,0.6);
+}
+
+.bet-card {
+  background: rgba(40, 40, 70, 0.93);
+  border: 1px solid #888;
+  border-radius: 10px;
+  padding: 10px;
+  width: 140px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+  gap: 6px;
+  min-width: 120px;
+}
+
+.bet-icon {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  object-fit: cover;
+}
+
+.bet-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.bet-controls input {
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #999;
+  background: #1e1e35;
+  color: #fff;
+  font-size: 12px;
+  outline: none;
+}
+
+.bet-controls button {
+  padding: 6px;
+  border: none;
+  background: #7c5aff;
+  color: #fff;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.bet-controls input:disabled,
+.bet-controls button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.placed {
+  position: absolute;
+  bottom: 6px;
+  font-size: 12px;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 4px 6px;
+  border-radius: 4px;
+}
+
+/* multipliers */
+.bet-multiplier {
+  font-weight: 700;
+  font-size: 16px;
+  margin: 4px 0 3px;
+  padding: 4px 12px;
+  border-radius: 100px;
+  background: rgba(36, 36, 58, 0.92);
+  border: 1px solid #444;
+  display: inline-block;
+  letter-spacing: 1px;
+  text-shadow: 0 2px 6px #000a;
+  box-shadow: 0 2px 6px rgba(24, 24, 56, 0.5);
+  pointer-events: none;
+  color: #fff;
+}
+.multiplier-x2 {
+  background: #1f3f5a;
+  border-color: #4fb5ff;
+  color: #4fb5ff;
+}
+.multiplier-x3 {
+  background: #3e1d2e;
+  border-color: #ff7171;
+  color: #ff7171;
+}
+.multiplier-x4 {
+  background: #301f40;
+  border-color: #bb35ff;
+  color: #bb35ff;
+}
+.multiplier-x5 {
+  background: #2a1a2f;
+  border-color: #ffb84d;
+  color: #ffb84d;
+}
+
+/* winner custom styling */
+.custom-winner {
+  background: rgba(10, 10, 10, 0.7) !important;
+  border-radius: 24px !important;
+  padding: 32px 48px !important;
+  min-width: 320px !important;
+  box-shadow: 0 10px 40px 0 rgba(0,0,0,0.7);
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.winner-headline {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: clamp(1.6rem, 2.1vw, 2.5rem);
+  margin-bottom: 10px;
+}
+.winner-box.custom-winner {
+  background: rgba(10, 10, 10, 0.4) !important;
+  border-radius: 24px !important;
+  padding: 32px 48px !important;
+  min-width: 280px !important;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.7);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.winner-img-large {
+  width: 120px;
+  height: auto;
+  border-radius: 10px;
+  margin-bottom: 8px;
+}
+.winner-timer {
+  font-size: 18px;
+  color: #fff;
+  letter-spacing: 0.5px;
+}
+
+/* responsive */
+@media (max-width: 1000px) {
+  .bet-history-wrapper {
+    flex-direction: column;
+    padding: 0 12px;
+  }
+  .history-box {
+    width: 100%;
+    margin-top: 12px;
+  }
+  .bet-card {
+    width: 120px;
+  }
+  .bet-icon {
+    width: 36px;
+    height: 36px;
+  }
+  .bet-controls input {
+    font-size: 11px;
+  }
+  .bet-controls button {
+    font-size: 11px;
+  }
+  .race-inner {
+    min-width: 800px;
+  }
+}
+
+@media (max-width: 800px) {
+  .race-box {
+    height: 40vh;
+    min-height: 180px;
+  }
+  .race-inner {
+    height: 40vh;
+    min-height: 180px;
+  }
+  .lane-label {
+    font-size: 13px;
+    width: 140px;
+  }
+  .winner-box.custom-winner {
+    padding: 24px 32px !important;
+    min-width: 220px !important;
+  }
+}

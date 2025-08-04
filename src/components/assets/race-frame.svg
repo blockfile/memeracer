@@ -1,0 +1,90 @@
+<svg width="2400" height="1400" viewBox="0 0 2400 1400" xmlns="http://www.w3.org/2000/svg">
+  <!-- Outer glow background -->
+  <defs>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="20" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Galaxy gradient for border -->
+    <linearGradient id="galaxy-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#7e3aff" />
+      <stop offset="35%" stop-color="#5ec8ff" />
+      <stop offset="65%" stop-color="#9f5eff" />
+      <stop offset="100%" stop-color="#3f00ff" />
+    </linearGradient>
+
+    <!-- Nebula soft glow overlay -->
+    <radialGradient id="nebula" cx="30%" cy="30%" r="60%">
+      <stop offset="0%" stop-color="#b479ff" stop-opacity="0.4"/>
+      <stop offset="0.6" stop-color="#4f9eff" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="transparent" stop-opacity="0"/>
+    </radialGradient>
+
+    <radialGradient id="nebula2" cx="70%" cy="70%" r="70%">
+      <stop offset="0%" stop-color="#63d2ff" stop-opacity="0.3"/>
+      <stop offset="0.7" stop-color="#d17aff" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="transparent" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- Faint starfield background -->
+  <rect width="2400" height="1400" fill="none"/>
+
+  <!-- Nebula overlays -->
+  <rect width="2400" height="1400" fill="url(#nebula)" />
+  <rect width="2400" height="1400" fill="url(#nebula2)" />
+
+  <!-- Border (thick frame) -->
+  <path
+    d="
+      M40,40 
+      H2360 
+      V1360 
+      H40 
+      Z
+      M140,140 
+      H2260 
+      V1260 
+      H140 
+      Z
+    "
+    fill="none"
+    stroke="url(#galaxy-gradient)"
+    stroke-width="80"
+    filter="url(#glow)"
+    stroke-linejoin="round"
+  />
+
+  <!-- Inner accent glow (lighter thin line) -->
+  <rect x="140" y="140" width="2120" height="1120"
+    fill="none"
+    stroke="rgba(255,255,255,0.15)"
+    stroke-width="4"
+    rx="12"
+  />
+
+  <!-- Stars scatter -->
+  <g fill="white" opacity="0.8">
+    <!-- random-ish stars -->
+    <circle cx="300" cy="200" r="2" opacity="0.6"/>
+    <circle cx="500" cy="1000" r="1.5" opacity="0.5"/>
+    <circle cx="1800" cy="300" r="2.5" opacity="0.7"/>
+    <circle cx="2200" cy="1100" r="1" opacity="0.4"/>
+    <circle cx="150" cy="900" r="1.8" opacity="0.5"/>
+    <circle cx="800" cy="400" r="2" opacity="0.8"/>
+    <circle cx="1900" cy="700" r="1.2" opacity="0.6"/>
+    <circle cx="1200" cy="100" r="1.5" opacity="0.7"/>
+    <circle cx="600" cy="600" r="2" opacity="0.6"/>
+    <circle cx="1700" cy="500" r="1.7" opacity="0.5"/>
+    <!-- more small twinkles -->
+    <circle cx="100" cy="100" r="1" opacity="0.3"/>
+    <circle cx="2300" cy="150" r="1" opacity="0.35"/>
+    <circle cx="200" cy="1250" r="1.2" opacity="0.25"/>
+    <circle cx="900" cy="1300" r="1" opacity="0.3"/>
+    <circle cx="1400" cy="1200" r="1.3" opacity="0.4"/>
+  </g>
+</svg>
