@@ -18,7 +18,7 @@ const LoserSchema = new mongoose.Schema({
 
 const RaceResultSchema = new mongoose.Schema(
   {
-    raceId: { type: String, required: true }, // unique enforced below
+    raceId: { type: String, required: true },
     timestamp: { type: Date, default: Date.now },
     multipliers: { type: Map, of: Number, required: true },
     winner: {

@@ -1,20 +1,23 @@
-// routes/user.js
 const express = require("express");
 const router = express.Router();
 const User = require("../models/User");
-const { getSolBalance } = require("../utils/getSolBalance");
 const nacl = require("tweetnacl");
-const { PublicKey } = require("@solana/web3.js");
+const { Connection, PublicKey } = require("@solana/web3.js");
+const { getAssociatedTokenAddress, getAccount } = require("@solana/spl-token");
+
+const TOKEN_MINT_ADDRESS = "8h9iB1HT4WPW3vzFUBHW9m4brea7a8tJwkZh2boHH1y4";
+const connection = new Connection(
+  process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com",
+  { commitment: "confirmed" }
+);
 
 // Utility to verify a signed message from Phantom
 function verifySignature({ walletAddress, message, signature }) {
   try {
-    // Phantom returns signature as Uint8Array; if transmitted as base64 or array, normalize accordingly.
     let sigBuf;
     if (Array.isArray(signature)) {
       sigBuf = Uint8Array.from(signature);
     } else if (typeof signature === "string") {
-      // assume base64
       sigBuf = Uint8Array.from(Buffer.from(signature, "base64"));
     } else if (signature instanceof Uint8Array) {
       sigBuf = signature;
@@ -33,26 +36,35 @@ function verifySignature({ walletAddress, message, signature }) {
 }
 
 // POST /api/user/connect
-// Expects: { walletAddress, message, signature }
-// Optional: tokenBalance (if you want client-supplied), otherwise server fetches fresh SOL balance.
 router.post("/connect", async (req, res) => {
   try {
-    const { walletAddress, message, signature, tokenBalance } = req.body;
+    const { walletAddress, message, signature } = req.body;
     if (!walletAddress || !message || !signature) {
-      return res.status(400).json({ error: "walletAddress, message and signature required" });
+      return res
+        .status(400)
+        .json({ error: "walletAddress, message and signature required" });
     }
 
-    // verify ownership
     const isValid = verifySignature({ walletAddress, message, signature });
     if (!isValid) {
       return res.status(401).json({ error: "Invalid signature" });
     }
 
-    // get latest SOL balance from chain (overrides client if provided)
-    const solBal = await getSolBalance(walletAddress);
+    let tokenBalance = 0;
+    try {
+      const tokenMint = new PublicKey(TOKEN_MINT_ADDRESS);
+      const tokenAccount = await getAssociatedTokenAddress(
+        tokenMint,
+        new PublicKey(walletAddress)
+      );
+      const accountInfo = await getAccount(connection, tokenAccount);
+      tokenBalance = Number(accountInfo.amount) / 1e9; // Assuming 9 decimals
+    } catch (e) {
+      console.warn(`Failed to fetch token balance for ${walletAddress}:`, e);
+    }
 
     const update = {
-      tokenBalance: String(solBal),
+      tokenBalance: String(tokenBalance),
     };
 
     const user = await User.findOneAndUpdate(
@@ -75,8 +87,26 @@ router.post("/connect", async (req, res) => {
 router.get("/:walletAddress", async (req, res) => {
   try {
     const { walletAddress } = req.params;
-    const user = await User.findOne({ walletAddress: walletAddress.toLowerCase() });
+    const user = await User.findOne({
+      walletAddress: walletAddress.toLowerCase(),
+    });
     if (!user) return res.status(404).json({ error: "User not found" });
+
+    let tokenBalance = Number(user.tokenBalance) || 0;
+    try {
+      const tokenMint = new PublicKey(TOKEN_MINT_ADDRESS);
+      const tokenAccount = await getAssociatedTokenAddress(
+        tokenMint,
+        new PublicKey(walletAddress)
+      );
+      const accountInfo = await getAccount(connection, tokenAccount);
+      tokenBalance = Number(accountInfo.amount) / 1e9; // Assuming 9 decimals
+      user.tokenBalance = String(tokenBalance);
+      await user.save();
+    } catch (e) {
+      console.warn(`Failed to refresh token balance for ${walletAddress}:`, e);
+    }
+
     return res.json(user);
   } catch (err) {
     console.error("get user error", err);
