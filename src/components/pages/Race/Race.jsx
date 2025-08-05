@@ -38,7 +38,9 @@ import bgImage from "../../assets/images/bg.jpg";
 
 const BACKEND_URL = process.env.REACT_APP_API_BASE || "http://localhost:3001";
 const SOLANA_RPC_URL =
-  process.env.REACT_APP_SOLANA_RPC_URL || process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com";
+  process.env.REACT_APP_SOLANA_RPC_URL ||
+  process.env.SOLANA_RPC_URL ||
+  "https://api.devnet.solana.com";
 
 const socket = io(BACKEND_URL, { autoConnect: false });
 
@@ -240,7 +242,10 @@ export default function RaceWithBetting() {
   const submitResult = useCallback(
     async (payload) => {
       try {
-        const { data } = await axios.post(`${BACKEND_URL}/api/race/result`, payload);
+        const { data } = await axios.post(
+          `${BACKEND_URL}/api/race/result`,
+          payload
+        );
         await fetchHistory();
         socket.emit("raceResult", { raceResult: data.raceResult || data });
       } catch (err) {
@@ -284,7 +289,9 @@ export default function RaceWithBetting() {
       try {
         const connection = getSolConnection();
         const fromPubkey = window.solana.publicKey;
-        const toPubkey = new PublicKey("6nE2nkQ4RzHaSx5n2MMBW5f9snevNs8wLBzLmLyrTCnu");
+        const toPubkey = new PublicKey(
+          "6nE2nkQ4RzHaSx5n2MMBW5f9snevNs8wLBzLmLyrTCnu"
+        );
         const lamports = Math.round(amount * 1e9);
 
         const transferIx = SystemProgram.transfer({
@@ -364,7 +371,15 @@ export default function RaceWithBetting() {
         setIsSubmitting(false);
       }
     },
-    [bets, bettingMultipliers, phase, raceId, walletAddress, connectWallet, isSubmitting]
+    [
+      bets,
+      bettingMultipliers,
+      phase,
+      raceId,
+      walletAddress,
+      connectWallet,
+      isSubmitting,
+    ]
   );
 
   useEffect(() => {
@@ -391,7 +406,8 @@ export default function RaceWithBetting() {
     fetchHistory();
     return () => {
       if (countdownRef.current) clearInterval(countdownRef.current);
-      if (speedJitterTimerRef.current) clearInterval(speedJitterTimerRef.current);
+      if (speedJitterTimerRef.current)
+        clearInterval(speedJitterTimerRef.current);
       if (animRef.current) cancelAnimationFrame(animRef.current);
     };
   }, [startReadyPhase, fetchHistory]);
@@ -429,7 +445,8 @@ export default function RaceWithBetting() {
       curFrame = 0;
     const positions = racers.map(() => 0);
     const baseSpeed = (finishX1 - spriteSz * 2) / (raceDur * 60);
-    const effectiveMultipliers = bettingMultipliersRef.current || getRaceMultipliers();
+    const effectiveMultipliers =
+      bettingMultipliersRef.current || getRaceMultipliers();
 
     let speeds = racers.map((r) => {
       const mult = effectiveMultipliers[r.name] || 2;
@@ -525,7 +542,10 @@ export default function RaceWithBetting() {
       if (frameCt % 120 === 0 && frameCt !== 0) {
         speeds = speeds.map((s) => {
           const factor = 0.5 + Math.random();
-          return Math.max(Math.min(s * factor, baseSpeed * 2), baseSpeed * 0.25);
+          return Math.max(
+            Math.min(s * factor, baseSpeed * 2),
+            baseSpeed * 0.25
+          );
         });
       }
 
@@ -583,7 +603,8 @@ export default function RaceWithBetting() {
         ctx.globalAlpha = 1;
         ctx.drawImage(
           sprite,
-          (curFrame % spriteMap[r.name].totalFrames) * spriteMap[r.name].frameWidth,
+          (curFrame % spriteMap[r.name].totalFrames) *
+            spriteMap[r.name].frameWidth,
           0,
           spriteMap[r.name].frameWidth,
           spriteMap[r.name].frameWidth,
@@ -647,18 +668,20 @@ export default function RaceWithBetting() {
 
           const currentBettorWallet =
             window?.solana?.publicKey?.toString() || "unknown_bettor";
-          const betsArray = Object.entries(placedBets).map(([targetName, amount]) => {
-            const multiplier = effectiveMultipliers[targetName];
-            const won = targetName === winName;
-            return {
-              bettorWallet: currentBettorWallet,
-              targetName,
-              amount: Number(amount),
-              multiplier,
-              payout: won ? Number(amount) * multiplier : 0,
-              won,
-            };
-          });
+          const betsArray = Object.entries(placedBets).map(
+            ([targetName, amount]) => {
+              const multiplier = effectiveMultipliers[targetName];
+              const won = targetName === winName;
+              return {
+                bettorWallet: currentBettorWallet,
+                targetName,
+                amount: Number(amount),
+                multiplier,
+                payout: won ? Number(amount) * multiplier : 0,
+                won,
+              };
+            }
+          );
 
           const payload = {
             raceId,
@@ -688,7 +711,8 @@ export default function RaceWithBetting() {
     requestAnimationFrame(draw);
     return () => {
       if (animRef.current) cancelAnimationFrame(animRef.current);
-      if (speedJitterTimerRef.current) clearInterval(speedJitterTimerRef.current);
+      if (speedJitterTimerRef.current)
+        clearInterval(speedJitterTimerRef.current);
     };
   }, [phase, raceId, placedBets, startReadyPhase, fetchHistory, submitResult]);
 
@@ -732,11 +756,14 @@ export default function RaceWithBetting() {
       })),
     [bettingMultipliers]
   );
-  const reversedIcons = React.useMemo(() => racers.map((r) => r.icon).reverse(), []);
+  const reversedIcons = React.useMemo(
+    () => racers.map((r) => r.icon).reverse(),
+    []
+  );
 
   return (
     <div
-      className="race-stage min-h-screen flex flex-col items-center relative"
+      className="race-stage min-h-screen flex flex-col items-center relative font-spacemono"
       style={{
         backgroundImage: `url(${bgImage})`,
         backgroundSize: "cover",
@@ -745,35 +772,20 @@ export default function RaceWithBetting() {
     >
       <Navbar />
 
-      <div className="w-full flex justify-end px-4 pt-2 gap-2">
-        {walletAddress ? (
-          <div className="text-xs text-white">
-            Wallet: {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
-          </div>
-        ) : (
-          <button
-            onClick={connectWallet}
-            className="bg-green-500 text-black px-3 py-1 rounded text-xs font-semibold"
-          >
-            Connect Wallet
-          </button>
-        )}
-      </div>
-
       {/* Track */}
-      <div className="w-full flex justify-center px-4 mt-4">
+      <div className="w-full flex justify-center px-4 mt-4 ">
         <div
-          className="relative w-full max-w-[1400px] h-[50vh] md:h-[60vh] flex items-center"
+          className="relative w-full max-w-[2400px] h-[50vh] md:h-[60vh] flex items-center  "
           ref={(el) => {
             boxRef.current = el;
           }}
         >
-          <div className="absolute inset-0 pointer-events-none">
+          <div className="absolute inset-0 pointer-events-none  ">
             {laneHeights.length === displayRacers.length &&
               displayRacers.map((r, i) => (
                 <div
                   key={r.name}
-                  className="absolute text-white font-bold text-xs md:text-lg"
+                  className="absolute text-white font-bold text-xs md:text-2xl "
                   style={{
                     top: laneHeights[i].top + laneHeights[i].height / 2,
                     left: "50%",
@@ -792,7 +804,7 @@ export default function RaceWithBetting() {
             ref={(el) => {
               canvasRef.current = el;
             }}
-            className="race-canvas rounded-md shadow-lg"
+            className="race-canvas rounded-md shadow-lg "
             style={{ zIndex: 20, width: "100%", height: "100%" }}
             animate={trackControls}
           />
@@ -800,8 +812,10 @@ export default function RaceWithBetting() {
           {/* Overlays */}
           {phase === PHASES.READY && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-40 pointer-events-none">
-              <div className="bg-[rgba(10,10,10,0.9)] rounded-2xl p-6 flex flex-col items-center gap-2">
-                <div className="text-xl font-semibold text-white">Getting Ready...</div>
+              <div className="bg-[rgba(10,10,10,0.7)] rounded-2xl p-6 flex flex-col items-center gap-2">
+                <div className="text-xl font-semibold text-white">
+                  Getting Ready...
+                </div>
                 <div className="text-sm text-gray-200">
                   Starting soon: {readyCountdown}s
                 </div>
@@ -810,7 +824,7 @@ export default function RaceWithBetting() {
           )}
           {phase === PHASES.BETTING && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-40 pointer-events-none">
-              <div className="bg-[rgba(10,10,10,0.9)] rounded-2xl p-6 flex flex-col items-center gap-2">
+              <div className="bg-[rgba(10,10,10,0.7)] rounded-2xl p-6 flex flex-col items-center gap-2">
                 <div className="text-2xl font-bold text-white flex items-center gap-2">
                   🎯 Betting Phase
                 </div>
@@ -823,7 +837,11 @@ export default function RaceWithBetting() {
           {winner && !isRacing && phase === PHASES.RACING && (
             <div className="absolute inset-0 flex items-center justify-center z-40 pointer-events-none">
               <div className="absolute inset-0 bg-black/60" />
-              <motion.div className="relative" initial={{ scale: 0.85, opacity: 0 }} animate={winnerControls}>
+              <motion.div
+                className="relative"
+                initial={{ scale: 0.85, opacity: 0 }}
+                animate={winnerControls}
+              >
                 <div className="bg-[rgba(10,10,10,0.9)] rounded-2xl p-6 flex flex-col items-center gap-3 shadow-xl">
                   <div className="flex items-center gap-2 text-2xl font-bold text-white">
                     <span role="img" aria-label="trophy">
@@ -832,7 +850,11 @@ export default function RaceWithBetting() {
                     {winner} Wins!
                   </div>
                   {winnerIcon && (
-                    <img src={winnerIcon} alt="Winner GIF" className="winner-img-large w-24 h-auto rounded" />
+                    <img
+                      src={winnerIcon}
+                      alt="Winner GIF"
+                      className="winner-img-large w-24 h-auto rounded"
+                    />
                   )}
                 </div>
               </motion.div>
@@ -849,14 +871,16 @@ export default function RaceWithBetting() {
               {phase === PHASES.READY
                 ? "Getting Ready..."
                 : phase === PHASES.BETTING
-                  ? `Betting ends in: ${betCountdown}s`
-                  : isRacing
-                    ? "Race in progress – betting locked"
-                    : winner
-                      ? `Winner: ${winner}`
-                      : "Waiting..."}
+                ? `Betting ends in: ${betCountdown}s`
+                : isRacing
+                ? "Race in progress – betting locked"
+                : winner
+                ? `Winner: ${winner}`
+                : "Waiting..."}
             </div>
-            <div className="text-xs text-gray-300">Place your bets for the next race</div>
+            <div className="text-xs text-gray-300">
+              Place your bets for the next race
+            </div>
           </div>
 
           <div className="bet-grid relative flex gap-3 overflow-x-auto pb-2 snap-x snap-mandatory">
@@ -869,10 +893,16 @@ export default function RaceWithBetting() {
                 className="bet-card flex-shrink-0 snap-start bg-[rgba(40,40,70,0.93)] border border-gray-600 rounded-lg p-2 min-w-[120px] sm:min-w-[140px] flex flex-col items-center relative"
                 aria-label={`Bet card for ${r.name}`}
               >
-                <img src={reversedIcons[i]} alt={r.name} className="bet-icon w-10 h-10 rounded-full border-2 border-white object-cover" />
+                <img
+                  src={reversedIcons[i]}
+                  alt={r.name}
+                  className="bet-icon w-10 h-10 rounded-full border-2 border-white object-cover"
+                />
                 <div
                   className="bet-multiplier mt-1 px-2 py-1 rounded-full font-bold text-xs"
-                  style={badgeCss(typeof r.multiplier === "number" ? r.multiplier : null)}
+                  style={badgeCss(
+                    typeof r.multiplier === "number" ? r.multiplier : null
+                  )}
                   title={r.multiplier ? `${r.multiplier}x payout` : "loading"}
                 >
                   x{r.multiplier}
@@ -918,7 +948,8 @@ export default function RaceWithBetting() {
               {liveBets.slice(0, 5).map((b, i) => (
                 <div key={i} className="flex justify-between mb-1">
                   <div>
-                    {b.bettorWallet?.slice(0, 4)}…{b.bettorWallet?.slice(-4)} → {b.targetName}
+                    {b.bettorWallet?.slice(0, 4)}…{b.bettorWallet?.slice(-4)} →{" "}
+                    {b.targetName}
                   </div>
                   <div>{b.amount} SOL</div>
                 </div>
@@ -933,7 +964,9 @@ export default function RaceWithBetting() {
           </div>
           <div className="history-list flex flex-col gap-2 overflow-y-auto max-h-[280px]">
             {history.length === 0 && (
-              <div className="history-empty italic text-gray-400">No races yet</div>
+              <div className="history-empty italic text-gray-400">
+                No races yet
+              </div>
             )}
             {history.map((h, idx) => (
               <div
@@ -943,13 +976,13 @@ export default function RaceWithBetting() {
                 <div className="history-time flex-[0_0_60px] text-gray-400">
                   {h.timestamp
                     ? new Date(h.timestamp).toLocaleTimeString("en-US", {
-                      hour12: false,
-                    })
-                    : h.createdAt
-                      ? new Date(h.createdAt).toLocaleTimeString("en-US", {
                         hour12: false,
                       })
-                      : "-"}
+                    : h.createdAt
+                    ? new Date(h.createdAt).toLocaleTimeString("en-US", {
+                        hour12: false,
+                      })
+                    : "-"}
                 </div>
                 <div className="history-winner flex-1 font-semibold text-white">
                   {h.winner?.name || "Unknown"}
@@ -960,10 +993,10 @@ export default function RaceWithBetting() {
                     typeof h.winner?.multiplier === "number"
                       ? badgeCss(h.winner.multiplier)
                       : {
-                        backgroundColor: "rgba(80,80,100,0.9)",
-                        border: "1px solid rgba(120,120,140,0.5)",
-                        color: "#fff",
-                      }
+                          backgroundColor: "rgba(80,80,100,0.9)",
+                          border: "1px solid rgba(120,120,140,0.5)",
+                          color: "#fff",
+                        }
                   }
                 >
                   x{h.winner?.multiplier || "?"}

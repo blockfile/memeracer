@@ -5,6 +5,8 @@ const mongoose = require("mongoose");
 const bs58 = require("bs58"); // pinned to 4.x for .decode
 const RaceResult = require("../models/RaceResult");
 const PendingRace = require("../models/PendingRace");
+const { scheduleRace } = require("../helpers/raceScheduler");
+
 const User = require("../models/User");
 const {
   Connection,
@@ -64,21 +66,27 @@ function getRaceMultipliers() {
 // GET or create upcoming pending race
 router.get("/next", async (req, res) => {
   try {
+    // grab the latest pending race
     let pending = await PendingRace.findOne().sort({ createdAt: -1 });
+
+    // if none exists, create it and kick off the scheduler
     if (!pending) {
       const raceId = `race_${Date.now()}_${Math.random()
         .toString(36)
-        .substring(2, 8)}`;
+        .slice(2, 8)}`;
       const multipliers = getRaceMultipliers();
-      pending = new PendingRace({ raceId, multipliers });
-      await pending.save();
+
+      pending = await new PendingRace({ raceId, multipliers }).save();
+      // schedule the phases/ticks
+      scheduleRace(req.io, raceId, multipliers);
     }
+
     res.json({
       raceId: pending.raceId,
       multipliers: Object.fromEntries(pending.multipliers),
     });
   } catch (e) {
-    console.error("Failed to get/create next race", e);
+    console.error("GET /api/race/next error:", e);
     res.status(500).json({ error: "Failed to get next race" });
   }
 });
@@ -146,8 +154,7 @@ router.post("/bet/submit", async (req, res) => {
       return res.status(400).json({ error: "Missing parameters" });
     }
 
-    const HARDCODED_TREASURY =
-      "6nE2nkQ4RzHaSx5n2MMBW5f9snevNs8wLBzLmLyrTCnu";
+    const HARDCODED_TREASURY = "6nE2nkQ4RzHaSx5n2MMBW5f9snevNs8wLBzLmLyrTCnu";
 
     const txDetails = await connection.getTransaction(txSignature, {
       commitment: "confirmed",
@@ -163,9 +170,7 @@ router.post("/bet/submit", async (req, res) => {
     );
     const treasuryIndex = accountKeys.indexOf(HARDCODED_TREASURY);
     if (treasuryIndex === -1)
-      return res
-        .status(400)
-        .json({ error: "Expected recipient not in tx" });
+      return res.status(400).json({ error: "Expected recipient not in tx" });
 
     const preBalances = txDetails.meta.preBalances;
     const postBalances = txDetails.meta.postBalances;
@@ -276,9 +281,7 @@ router.post("/result", async (req, res) => {
     const { raceId, multipliers, winner, losers = [], bets = [] } = req.body;
     if (!raceId || !multipliers || !winner || !bets) {
       await session.abortTransaction();
-      return res
-        .status(400)
-        .json({ error: "Missing required fields" });
+      return res.status(400).json({ error: "Missing required fields" });
     }
 
     let existing = await RaceResult.findOne({ raceId }).session(session);
@@ -341,9 +344,7 @@ router.post("/result", async (req, res) => {
 // History
 router.get("/history", async (req, res) => {
   try {
-    const results = await RaceResult.find()
-      .sort({ timestamp: -1 })
-      .limit(50);
+    const results = await RaceResult.find().sort({ timestamp: -1 }).limit(50);
     res.json(results);
   } catch (e) {
     console.error("History fetch error:", e);
