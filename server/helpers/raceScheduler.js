@@ -25,7 +25,9 @@ async function scheduleRace(
   raceId,
   multipliers,
   activeRaces,
-  startRaceLoop
+  startRaceLoop,
+  serverSeed,
+  serverSeedHash
 ) {
   let session = null;
   try {
@@ -42,7 +44,7 @@ async function scheduleRace(
       readyCountdown: race.readyCountdown,
       betCountdown: race.betCountdown,
       multipliers: Object.fromEntries(race.multipliers),
-      serverSeedHash: race.serverSeedHash,
+      serverSeedHash: serverSeedHash || race.serverSeedHash,
     };
     io.to("globalRaceRoom").emit("raceState", raceState);
     console.log(`Scheduling race ${raceId} in phase ${race.phase}`);
@@ -65,7 +67,15 @@ async function scheduleRace(
             race.betCountdown = 20;
             await race.save();
             console.log(`Race ${raceId} transitioning to betting phase`);
-            scheduleRace(io, raceId, multipliers, activeRaces, startRaceLoop);
+            scheduleRace(
+              io,
+              raceId,
+              multipliers,
+              activeRaces,
+              startRaceLoop,
+              serverSeed || race.serverSeed,
+              serverSeedHash || race.serverSeedHash
+            );
           }
         } catch (e) {
           console.error(`Error in ready phase for race ${raceId}:`, e);
@@ -93,9 +103,17 @@ async function scheduleRace(
             console.log(`Race ${raceId} transitioning to racing phase`);
             io.to("globalRaceRoom").emit("raceStart", {
               raceId,
-              serverSeed: race.serverSeed,
+              serverSeed: serverSeed || race.serverSeed,
             });
-            scheduleRace(io, raceId, multipliers, activeRaces, startRaceLoop);
+            scheduleRace(
+              io,
+              raceId,
+              multipliers,
+              activeRaces,
+              startRaceLoop,
+              serverSeed || race.serverSeed,
+              serverSeedHash || race.serverSeedHash
+            );
           }
         } catch (e) {
           console.error(`Error in betting phase for race ${raceId}:`, e);
@@ -253,7 +271,7 @@ async function scheduleRace(
 
           io.to("globalRaceRoom").emit("raceResult", {
             raceResult: raceResult.toObject(),
-            serverSeed: race.serverSeed,
+            serverSeed: serverSeed,
           });
           activeRaces.delete(raceId);
           // Delay intermission emission to allow winner display

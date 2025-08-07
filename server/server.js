@@ -60,7 +60,12 @@ async function startRaceLoop() {
   isStartingRace = true;
   try {
     let pending = await PendingRace.findOne().sort({ createdAt: -1 });
-    if (!pending || pending.phase === "completed") {
+    if (
+      !pending ||
+      pending.phase === "completed" ||
+      !pending.serverSeed ||
+      !pending.serverSeedHash
+    ) {
       const raceId = `race_${Date.now()}_${Math.random()
         .toString(36)
         .slice(2, 8)}`;
@@ -70,17 +75,29 @@ async function startRaceLoop() {
         .update(serverSeed)
         .digest("hex");
       const multipliers = getRaceMultipliers(serverSeed, raceId, raceId);
-      pending = new PendingRace({
-        raceId,
-        multipliers,
-        phase: "ready",
-        readyCountdown: 5,
-        betCountdown: 0,
-        serverSeed,
-        serverSeedHash,
-      });
-      await pending.save();
-      console.log("Created and saved new race:", raceId);
+      if (pending && !pending.serverSeed) {
+        // Update existing pending race if incomplete
+        pending.raceId = raceId;
+        pending.multipliers = multipliers;
+        pending.phase = "ready";
+        pending.readyCountdown = 5;
+        pending.betCountdown = 0;
+        pending.serverSeed = serverSeed;
+        pending.serverSeedHash = serverSeedHash;
+        await pending.save();
+      } else {
+        pending = new PendingRace({
+          raceId,
+          multipliers,
+          phase: "ready",
+          readyCountdown: 5,
+          betCountdown: 0,
+          serverSeed,
+          serverSeedHash,
+        });
+        await pending.save();
+      }
+      console.log("Created/Updated and saved new race:", raceId);
     }
     if (!activeRaces.has(pending.raceId)) {
       activeRaces.set(pending.raceId, true);
@@ -89,7 +106,9 @@ async function startRaceLoop() {
         pending.raceId,
         Object.fromEntries(pending.multipliers),
         activeRaces,
-        startRaceLoop
+        startRaceLoop,
+        pending.serverSeed,
+        pending.serverSeedHash
       );
     } else {
       // Ensure race is scheduled even if it exists but isn't running
@@ -98,7 +117,9 @@ async function startRaceLoop() {
         pending.raceId,
         Object.fromEntries(pending.multipliers),
         activeRaces,
-        startRaceLoop
+        startRaceLoop,
+        pending.serverSeed,
+        pending.serverSeedHash
       );
     }
   } catch (e) {
