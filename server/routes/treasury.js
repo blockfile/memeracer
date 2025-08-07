@@ -21,7 +21,9 @@ function loadTreasuryKeypair() {
       if (Array.isArray(parsed) && parsed.length === 64) {
         return Keypair.fromSecretKey(Uint8Array.from(parsed));
       }
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to parse TREASURY_SECRET_KEY as JSON array:", e);
+    }
 
     // base64
     try {
@@ -29,7 +31,9 @@ function loadTreasuryKeypair() {
       if (buf.length === 64) {
         return Keypair.fromSecretKey(new Uint8Array(buf));
       }
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to parse TREASURY_SECRET_KEY as base64:", e);
+    }
 
     // base58
     try {
@@ -37,7 +41,9 @@ function loadTreasuryKeypair() {
       if (decoded.length === 64) {
         return Keypair.fromSecretKey(new Uint8Array(decoded));
       }
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to parse TREASURY_SECRET_KEY as base58:", e);
+    }
   }
 
   // 2. Private seed (32 bytes) path
@@ -52,17 +58,23 @@ function loadTreasuryKeypair() {
       try {
         const buf = Buffer.from(seedRaw, "base64");
         if (buf.length === 32) seed = new Uint8Array(buf);
-      } catch {}
+      } catch (e) {
+        console.warn("Failed to parse TREASURY_PRIVATE_SEED as base64:", e);
+      }
     }
     if (seed && seed.length === 32) {
       // ed25519 seed -> full keypair
       const kp = nacl.sign.keyPair.fromSeed(seed); // secretKey is 64 bytes
       return Keypair.fromSecretKey(Uint8Array.from(kp.secretKey));
     }
-    throw new Error("TREASURY_PRIVATE_SEED provided but invalid (expect 32-byte hex or base64)");
+    throw new Error(
+      "TREASURY_PRIVATE_SEED provided but invalid (expect 32-byte hex or base64)"
+    );
   }
 
-  throw new Error("No treasury key material provided. Set TREASURY_PRIVATE_SEED or TREASURY_SECRET_KEY");
+  throw new Error(
+    "No treasury key material provided. Set TREASURY_PRIVATE_SEED or TREASURY_SECRET_KEY"
+  );
 }
 
 router.get("/address", (req, res) => {
@@ -71,7 +83,9 @@ router.get("/address", (req, res) => {
     res.json({ address: treasury.publicKey.toString() });
   } catch (e) {
     console.error("Failed to get treasury address:", e);
-    res.status(500).json({ error: e.message || "Failed to load treasury address" });
+    res
+      .status(500)
+      .json({ error: e.message || "Failed to load treasury address" });
   }
 });
 

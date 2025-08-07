@@ -1,13 +1,14 @@
+// routes/race.js
 require("dotenv").config();
 const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
+const crypto = require("crypto");
 const bs58 = require("bs58");
 const RaceResult = require("../models/RaceResult");
 const PendingRace = require("../models/PendingRace");
-const PendingBet = require("../models/PendingBet"); // New model for pending bets
+const PendingBet = require("../models/PendingBet");
 const User = require("../models/User");
-const { scheduleRace } = require("../helpers/raceScheduler");
 const {
   Connection,
   PublicKey,
@@ -23,7 +24,7 @@ const {
   createAssociatedTokenAccountInstruction,
 } = require("@solana/spl-token");
 
-const RAW_PROBS = { 5: 0.05, 4: 0.1, 3: 0.3, 2: 0.7 };
+const RAW_PROBS = { 5: 0.15, 4: 0.18, 3: 0.25, 2: 0.4 };
 const racers = ["Pepe", "Wojak", "Doge", "Chad", "Milady"];
 const connection = new Connection(
   process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com",
@@ -56,13 +57,28 @@ function getTreasuryKeypair() {
 }
 
 function getWeightForMultiplier(m) {
-  return Math.pow(RAW_PROBS[m] || 0, 2);
+  return 1 / (RAW_PROBS[m] || 0.4);
 }
 
-function getRaceMultipliers() {
-  const pool = [5, 4, 3, 2, 2];
+function getProvablyFairRandom(serverSeed, clientSeed, raceId, nonce) {
+  const input = `${serverSeed}:${clientSeed}:${raceId}:${nonce}`;
+  const hash = crypto.createHash("sha256").update(input).digest("hex");
+  return parseInt(hash.slice(0, 8), 16) / 0xffffffff;
+}
+
+function getRaceMultipliers(serverSeed, clientSeed, raceId) {
+  const basePool = [2, 2, 2, 3];
+  const random = getProvablyFairRandom(
+    serverSeed,
+    clientSeed,
+    raceId,
+    "high_multiplier"
+  );
+  const high = random < 0.1 ? 5 : 4;
+  const pool = [...basePool, high];
   for (let i = pool.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const random = getProvablyFairRandom(serverSeed, clientSeed, raceId, i);
+    const j = Math.floor(random * (i + 1));
     [pool[i], pool[j]] = [pool[j], pool[i]];
   }
   const m = {};
@@ -74,25 +90,18 @@ function getRaceMultipliers() {
 
 router.get("/next", async (req, res) => {
   try {
-    let pending = await PendingRace.findOne().sort({ createdAt: -1 });
-
+    const pending = await PendingRace.findOne().sort({ createdAt: -1 });
     if (!pending) {
-      const raceId = `race_${Date.now()}_${Math.random()
-        .toString(36)
-        .slice(2, 8)}`;
-      const multipliers = getRaceMultipliers();
-
-      pending = await new PendingRace({ raceId, multipliers }).save();
-      scheduleRace(req.io, raceId, multipliers);
+      return res.status(404).json({ error: "No active race found" });
     }
-
     res.json({
       raceId: pending.raceId,
       multipliers: Object.fromEntries(pending.multipliers),
+      serverSeedHash: pending.serverSeedHash,
     });
   } catch (e) {
     console.error("GET /api/race/next error:", e);
-    res.status(500).json({ error: "Failed to get next race" });
+    res.status(500).json({ error: "Failed to get current race" });
   }
 });
 
@@ -102,7 +111,6 @@ router.post("/init", async (req, res) => {
     if (!raceId || !multipliers)
       return res.status(400).json({ error: "Missing data" });
 
-    // Validate multipliers
     const validRacers = ["Pepe", "Wojak", "Doge", "Chad", "Milady"];
     const validMultipliers = [2, 3, 4, 5];
     const multiplierKeys = Object.keys(multipliers);
@@ -119,13 +127,25 @@ router.post("/init", async (req, res) => {
       return res.json({
         raceId,
         multipliers: Object.fromEntries(pending.multipliers),
+        serverSeedHash: pending.serverSeedHash,
       });
     }
-    pending = new PendingRace({ raceId, multipliers });
+    const serverSeed = crypto.randomBytes(32).toString("hex");
+    const serverSeedHash = crypto
+      .createHash("sha256")
+      .update(serverSeed)
+      .digest("hex");
+    pending = new PendingRace({
+      raceId,
+      multipliers,
+      serverSeed,
+      serverSeedHash,
+    });
     await pending.save();
     res.status(201).json({
       raceId,
       multipliers,
+      serverSeedHash,
     });
   } catch (e) {
     console.error("Failed to init race", e);
@@ -140,6 +160,7 @@ router.get("/init/:raceId", async (req, res) => {
     res.json({
       raceId: pending.raceId,
       multipliers: Object.fromEntries(pending.multipliers),
+      serverSeedHash: pending.serverSeedHash,
     });
   } catch (e) {
     console.error("Error fetching multipliers:", e);
@@ -158,7 +179,6 @@ router.post("/bet/submit", async (req, res) => {
       multiplier,
     } = req.body;
 
-    // Validate required fields
     const missing = [];
     if (!bettorWallet) missing.push("bettorWallet");
     if (!targetName) missing.push("targetName");
@@ -172,31 +192,28 @@ router.post("/bet/submit", async (req, res) => {
       });
     }
 
-    // Validate bettorWallet
     try {
       new PublicKey(bettorWallet);
     } catch (e) {
       return res.status(400).json({ error: "Invalid bettorWallet" });
     }
 
-    // Validate targetName
     const validRacers = ["Pepe", "Wojak", "Doge", "Chad", "Milady"];
     if (!validRacers.includes(targetName)) {
       return res.status(400).json({ error: "Invalid targetName" });
     }
 
-    // Validate amount
     if (typeof amount !== "number" || amount <= 0) {
       return res.status(400).json({ error: "Invalid amount" });
     }
 
-    // Validate raceId
     const race = await PendingRace.findOne({ raceId });
-    if (!race) {
-      return res.status(400).json({ error: "Invalid raceId" });
+    if (!race || race.phase !== "betting") {
+      return res
+        .status(400)
+        .json({ error: "Invalid raceId or betting closed" });
     }
 
-    // Validate multiplier
     const validMultipliers = [2, 3, 4, 5];
     if (
       typeof multiplier !== "number" ||
@@ -205,7 +222,6 @@ router.post("/bet/submit", async (req, res) => {
       return res.status(400).json({ error: "Invalid multiplier" });
     }
 
-    // Verify transaction
     const txInfo = await connection.getTransaction(txSignature, {
       commitment: "confirmed",
     });
@@ -213,7 +229,6 @@ router.post("/bet/submit", async (req, res) => {
       return res.status(400).json({ error: "Invalid or failed transaction" });
     }
 
-    // Save bet to PendingBet
     const bet = new PendingBet({
       bettorWallet,
       targetName,
@@ -225,9 +240,8 @@ router.post("/bet/submit", async (req, res) => {
     });
     await bet.save();
 
-    // Emit bet event
     if (req.io) {
-      req.io.emit("betPlaced", {
+      req.io.to("globalRaceRoom").emit("betPlaced", {
         bettorWallet,
         targetName,
         amount,
@@ -255,7 +269,6 @@ async function payOutWinnersOnchain(raceResult, io) {
   const treasuryPubkey = treasury.publicKey;
   let treasuryTokenAccount;
 
-  // Check or create treasury token account
   try {
     treasuryTokenAccount = await getAssociatedTokenAddress(
       tokenMint,
@@ -285,7 +298,10 @@ async function payOutWinnersOnchain(raceResult, io) {
   for (const bet of raceResult.bets) {
     if (bet.won && bet.payout > 0) {
       const w = bet.bettorWallet;
-      payoutsByWallet[w] = (payoutsByWallet[w] || 0) + bet.payout;
+      const profit = bet.payout - bet.amount;
+      const rake = profit * 0.05;
+      const netPayout = bet.payout - rake;
+      payoutsByWallet[w] = (payoutsByWallet[w] || 0) + netPayout;
     }
   }
 
@@ -300,7 +316,6 @@ async function payOutWinnersOnchain(raceResult, io) {
         toPubkey
       );
 
-      // Check if recipient token account exists
       try {
         await getAccount(connection, toTokenAccount);
       } catch (e) {
@@ -310,7 +325,7 @@ async function payOutWinnersOnchain(raceResult, io) {
         continue;
       }
 
-      const lamports = Math.round(totalPayout * 1e9); // Assuming 9 decimals
+      const lamports = Math.round(totalPayout * 1e9);
 
       const tx = new Transaction().add(
         createTransferInstruction(
@@ -349,7 +364,7 @@ async function payOutWinnersOnchain(raceResult, io) {
       }
 
       if (io) {
-        io.emit("payout", {
+        io.to("globalRaceRoom").emit("payout", {
           wallet: bettorWallet,
           amount: totalPayout,
           signature,
@@ -363,72 +378,6 @@ async function payOutWinnersOnchain(raceResult, io) {
     }
   }
 }
-
-router.post("/result", async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-  try {
-    const { raceId, multipliers, winner, losers = [], bets = [] } = req.body;
-    if (!raceId || !multipliers || !winner || !bets) {
-      await session.abortTransaction();
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    let existing = await RaceResult.findOne({ raceId }).session(session);
-    if (existing) {
-      await session.commitTransaction();
-      return res.status(200).json({
-        message: "Already recorded",
-        raceResult: existing,
-      });
-    }
-
-    for (const bet of bets) {
-      const { bettorWallet, amount, payout, won } = bet;
-      let user = await User.findOne({ walletAddress: bettorWallet }).session(
-        session
-      );
-      if (!user) {
-        user = new User({ walletAddress: bettorWallet, tokenBalance: 0 });
-      }
-      if (won) user.tokenBalance = (user.tokenBalance || 0) + payout;
-      else user.tokenBalance = Math.max((user.tokenBalance || 0) - amount, 0);
-      await user.save({ session });
-    }
-
-    const raceResult = new RaceResult({
-      raceId,
-      multipliers,
-      winner: {
-        name: winner.name,
-        walletAddress: winner.walletAddress,
-        multiplier: winner.multiplier,
-      },
-      losers,
-      bets,
-    });
-
-    await raceResult.save({ session });
-    await PendingRace.deleteOne({ raceId }).session(session);
-    await PendingBet.deleteMany({ raceId }).session(session); // Clean up pending bets
-
-    await session.commitTransaction();
-
-    if (req.io) {
-      req.io.emit("raceResult", { raceResult });
-    }
-
-    await payOutWinnersOnchain(raceResult, req.io);
-
-    res.status(201).json({ success: true, raceResult });
-  } catch (err) {
-    await session.abortTransaction();
-    console.error("Save race result error:", err);
-    res.status(500).json({ error: "Internal server error" });
-  } finally {
-    session.endSession();
-  }
-});
 
 router.get("/history", async (req, res) => {
   try {
@@ -451,4 +400,4 @@ router.get("/result/:raceId", async (req, res) => {
   }
 });
 
-module.exports = router;
+module.exports = { router, getRaceMultipliers, payOutWinnersOnchain };

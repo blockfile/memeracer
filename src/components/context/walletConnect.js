@@ -25,7 +25,7 @@ export const WalletProvider = ({ children }) => {
       const pk = resp.publicKey.toString();
       setWalletAddress(pk);
 
-      // Sign a one‐time message
+      // Sign a one-time message
       const message = `Authenticate to MemeRacer at ${Date.now()}`;
       const encoded = new TextEncoder().encode(message);
       const signed = await window.solana.signMessage(encoded, "utf8");
@@ -54,10 +54,12 @@ export const WalletProvider = ({ children }) => {
     setUser(null);
     try {
       window.solana.disconnect();
-    } catch {}
+    } catch (e) {
+      console.warn("Failed to disconnect wallet:", e); // Log the error instead of empty block
+    }
   }, []);
 
-  // Auto‐connect and event listeners
+  // Auto-connect and event listeners
   useEffect(() => {
     if (!window.solana?.isPhantom) return;
 
@@ -67,7 +69,7 @@ export const WalletProvider = ({ children }) => {
       .then(({ publicKey }) => {
         if (publicKey) connectWallet();
       })
-      .catch(() => {});
+      .catch((e) => console.warn("Silent reconnect failed:", e));
 
     const onConnect = (e) => setWalletAddress(e.publicKey.toString());
     const onDisconnect = () => disconnect();
