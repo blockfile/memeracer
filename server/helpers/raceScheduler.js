@@ -1,4 +1,3 @@
-// helpers/raceScheduler.js
 const mongoose = require("mongoose");
 const PendingRace = require("../models/PendingRace");
 const RaceResult = require("../models/RaceResult");
@@ -7,17 +6,44 @@ const User = require("../models/User");
 const crypto = require("crypto");
 const { payOutWinnersOnchain } = require("../routes/race");
 
-const RAW_PROBS = { 5: 0.15, 4: 0.18, 3: 0.25, 2: 0.4 };
 const racers = ["Pepe", "Wojak", "Doge", "Chad", "Milady"];
 
+const RAW_PROBS = { 5: 0.146, 4: 0.166, 3: 0.239, 2: 0.349 }; // Sum ≈ 0.9 with 10% house edge
 function getWeightForMultiplier(m) {
-  return 1 / (RAW_PROBS[m] || 0.4);
+  return RAW_PROBS[m] || 0.349; // Use adjusted probability
 }
 
 function getProvablyFairRandom(serverSeed, clientSeed, raceId, nonce) {
   const input = `${serverSeed}:${clientSeed}:${raceId}:${nonce}`;
   const hash = crypto.createHash("sha256").update(input).digest("hex");
   return parseInt(hash.slice(0, 8), 16) / 0xffffffff;
+}
+
+function getRaceMultipliers(serverSeed, clientSeed, raceId) {
+  const random = getProvablyFairRandom(
+    serverSeed,
+    clientSeed,
+    raceId,
+    "pool_config"
+  );
+  const useSpecialPool = random < 0.3; // 30% chance for [2, 2, 3, 3, 4/5]
+
+  let basePool;
+  if (useSpecialPool) {
+    const high = random < 0.5 ? 5 : 4; // 50% chance for 5x, 50% for 4x
+    basePool = [2, 2, 3, 3, high];
+  } else {
+    basePool = [2, 3, 4, 5, 2]; // Default balanced pool
+  }
+
+  for (let i = basePool.length - 1; i > 0; i--) {
+    const j = Math.floor(
+      getProvablyFairRandom(serverSeed, clientSeed, raceId, i) * (i + 1)
+    );
+    [basePool[i], basePool[j]] = [basePool[j], basePool[i]];
+  }
+
+  return racers.reduce((m, r, i) => ({ ...m, [r.name]: basePool[i] }), {});
 }
 
 async function scheduleRace(
@@ -126,7 +152,7 @@ async function scheduleRace(
     else if (race.phase === "racing") {
       const raceDur = 15000; // 15 seconds
       const t0 = Date.now();
-      const frameDelta = 1000 / 30; // 30 FPS updates to reduce load
+      const frameDelta = Math.floor(1000 / 60); // 60 FPS updates
       let positions = racers.map(() => 0);
       const clientSeed = race.raceId;
       const weights = racers.map((name) =>
@@ -150,25 +176,76 @@ async function scheduleRace(
       }
       const winnerIndex = idx === -1 ? 0 : idx;
 
-      // Set speeds based on multipliers, but ensure winner has the highest speed
-      let speeds = racers.map((r, i) => {
-        const mult = multipliers[r] || 2;
-        const baseSpeed = 1 / mult; // Lower multiplier (higher prob) gets higher base speed
-        const jitter = 0.9 + Math.random() * 0.2;
-        return baseSpeed * jitter;
-      });
-      // Swap or adjust to make winner fastest
-      const maxSpeed = Math.max(...speeds);
-      speeds[winnerIndex] = maxSpeed + 0.1; // Make winner slightly faster
-      // Normalize speeds so max is 1
-      const newMaxSpeed = Math.max(...speeds);
-      speeds = speeds.map((s) => s / newMaxSpeed);
+      // Provably fair scenario selection (0,1,2)
+      const scenarioRandom = getProvablyFairRandom(
+        race.serverSeed,
+        clientSeed,
+        race.raceId,
+        "scenario"
+      );
+      const scenario = Math.floor(scenarioRandom * 3);
+
+      // Provably fair false leader for scenarios that need it (not the winner)
+      let falseLeaderIndex = -1;
+      if (scenario === 1) {
+        const falseLeaderRandom = getProvablyFairRandom(
+          race.serverSeed,
+          clientSeed,
+          race.raceId,
+          "false_leader"
+        );
+        falseLeaderIndex = Math.floor(falseLeaderRandom * (racers.length - 1));
+        if (falseLeaderIndex >= winnerIndex) falseLeaderIndex++;
+      }
+
+      // Set base speeds
+      let baseSpeeds = racers.map(() => 0.9 + Math.random() * 0.2); // Random base speed between 0.9 and 1.1
+      baseSpeeds[winnerIndex] = Math.max(...baseSpeeds) + 0.1;
+      const newMaxBaseSpeed = Math.max(...baseSpeeds);
+      baseSpeeds = baseSpeeds.map((s) => s / newMaxBaseSpeed);
+
+      // Scenario-specific logic
+      let earlyFactors = new Array(racers.length).fill(1.0);
+      let lateFactors = new Array(racers.length).fill(1.0);
+      let switchPoint = 0.6;
+
+      if (scenario === 0) {
+        // Scenario 0: Winner slow start, boost end
+        earlyFactors[winnerIndex] = 0.8; // Slow early
+        lateFactors[winnerIndex] = 1.5; // Boost late
+      } else if (scenario === 1) {
+        // Scenario 1: False leader leads early, winner overtakes
+        earlyFactors[falseLeaderIndex] = 1.3; // False leader fast early
+        lateFactors[falseLeaderIndex] = 0.8; // False leader slows late
+        lateFactors[winnerIndex] = 1.3; // Winner boost late
+      } else if (scenario === 2) {
+        // Scenario 2: Close race, winner gradual pull ahead with jitter
+        switchPoint = 0.4; // Earlier switch for gradual pull
+        earlyFactors = earlyFactors.map(
+          (f, i) => f * (0.95 + Math.random() * 0.1)
+        ); // Small jitter early
+        lateFactors[winnerIndex] = 1.2; // Winner slight advantage late
+        lateFactors = lateFactors.map((f, i) =>
+          i !== winnerIndex ? f * (0.9 + Math.random() * 0.1) : f
+        ); // Jitter for others late
+      }
 
       const progressInterval = setInterval(() => {
         const timeElapsed = Date.now() - t0;
         if (timeElapsed < raceDur) {
           const progressFraction = timeElapsed / raceDur;
-          positions = speeds.map((s) => progressFraction * s * 1.1); // Slight boost to reach beyond 1 if needed
+          const earlyP = Math.min(progressFraction / switchPoint, 1);
+          const lateP = Math.max(
+            (progressFraction - switchPoint) / (1 - switchPoint),
+            0
+          );
+          positions = baseSpeeds.map(
+            (s, i) =>
+              s *
+              (earlyFactors[i] * earlyP * switchPoint +
+                lateFactors[i] * lateP * (1 - switchPoint)) *
+              1.1
+          );
           io.to("globalRaceRoom").emit("raceProgress", {
             raceId,
             positions: racers.reduce(

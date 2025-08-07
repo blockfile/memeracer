@@ -22,8 +22,12 @@ export const WalletProvider = ({ children }) => {
 
       // Open Phantom and get publicKey
       const resp = await window.solana.connect();
-      const pk = resp.publicKey.toString();
-      setWalletAddress(pk);
+      const publicKey = resp.publicKey;
+      if (publicKey) {
+        setWalletAddress(publicKey.toString());
+      } else {
+        throw new Error("No public key returned from wallet");
+      }
 
       // Sign a one-time message
       const message = `Authenticate to MemeRacer at ${Date.now()}`;
@@ -34,7 +38,7 @@ export const WalletProvider = ({ children }) => {
       const res = await axios.post(
         `${BACKEND_URL}/api/user/connect`,
         {
-          walletAddress: pk,
+          walletAddress: publicKey.toString(),
           message,
           signature: Array.from(signed.signature),
         },
@@ -43,7 +47,7 @@ export const WalletProvider = ({ children }) => {
       setUser(res.data);
     } catch (e) {
       console.error("connectWallet error", e);
-      setError("Failed to connect");
+      setError("Failed to connect: " + (e.message || "Unknown error"));
     } finally {
       setConnecting(false);
     }
@@ -53,9 +57,11 @@ export const WalletProvider = ({ children }) => {
     setWalletAddress(null);
     setUser(null);
     try {
-      window.solana.disconnect();
+      if (window.solana && window.solana.disconnect) {
+        window.solana.disconnect();
+      }
     } catch (e) {
-      console.warn("Failed to disconnect wallet:", e); // Log the error instead of empty block
+      console.warn("Failed to disconnect wallet:", e);
     }
   }, []);
 
@@ -67,19 +73,30 @@ export const WalletProvider = ({ children }) => {
     window.solana
       .connect({ onlyIfTrusted: true })
       .then(({ publicKey }) => {
-        if (publicKey) connectWallet();
+        if (publicKey) {
+          setWalletAddress(publicKey.toString());
+          connectWallet();
+        }
       })
       .catch((e) => console.warn("Silent reconnect failed:", e));
 
-    const onConnect = (e) => setWalletAddress(e.publicKey.toString());
+    const onConnect = (e) => {
+      if (e.publicKey) {
+        setWalletAddress(e.publicKey.toString());
+      }
+    };
     const onDisconnect = () => disconnect();
 
-    window.solana.on("connect", onConnect);
-    window.solana.on("disconnect", onDisconnect);
+    if (window.solana) {
+      window.solana.on("connect", onConnect);
+      window.solana.on("disconnect", onDisconnect);
+    }
 
     return () => {
-      window.solana.removeListener("connect", onConnect);
-      window.solana.removeListener("disconnect", onDisconnect);
+      if (window.solana) {
+        window.solana.removeListener("connect", onConnect);
+        window.solana.removeListener("disconnect", onDisconnect);
+      }
     };
   }, [connectWallet, disconnect]);
 

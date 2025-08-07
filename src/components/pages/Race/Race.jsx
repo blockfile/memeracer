@@ -1,4 +1,3 @@
-// RaceWithBetting.jsx
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { motion, useAnimation } from "framer-motion";
 import axios from "axios";
@@ -16,25 +15,25 @@ import Navbar from "../Navbar/Navbar";
 import bs58 from "bs58";
 
 // SPRITES
-import pepeSpriteSheet from "../../assets/images/pepe_sprite_sheet.png";
-import wojakSpriteSheet from "../../assets/images/a.png";
-import dogeSpriteSheet from "../../assets/images/a2.png";
-import chadSpriteSheet from "../../assets/images/a3_sprite_sheet.png";
-import miladySpriteSheet from "../../assets/images/a4.png";
+import pepeSpriteSheet from "../../assets/images/pepe-sprite.png";
+import wojakSpriteSheet from "../../assets/images/wojack-sprite.png";
+import dogeSpriteSheet from "../../assets/images/doge-sprite.png";
+import chadSpriteSheet from "../../assets/images/chad-sprite.png";
+import miladySpriteSheet from "../../assets/images/milady-sprite.png";
 
 // ICONS
-import icon1 from "../../assets/images/1.png";
-import icon2 from "../../assets/images/2.png";
-import icon3 from "../../assets/images/3.png";
-import icon4 from "../../assets/images/4.png";
-import icon5 from "../../assets/images/5.png";
+import icon1 from "../../assets/images/pepe.png";
+import icon2 from "../../assets/images/wojack.png";
+import icon3 from "../../assets/images/doge.png";
+import icon4 from "../../assets/images/chad.png";
+import icon5 from "../../assets/images/milady.png";
 
 // GIFs
 import pepeGif from "../../assets/gifs/pepe-run.gif";
-import aGif from "../../assets/gifs/a.gif";
-import a2Gif from "../../assets/gifs/a2.gif";
-import a3Gif from "../../assets/gifs/a3.gif";
-import a4Gif from "../../assets/gifs/a4.gif";
+import aGif from "../../assets/gifs/wojack.gif";
+import a2Gif from "../../assets/gifs/doge.gif";
+import a3Gif from "../../assets/gifs/chad.gif";
+import a4Gif from "../../assets/gifs/milady.gif";
 
 // BACKGROUND
 import bgImage from "../../assets/images/bg.jpg";
@@ -49,6 +48,7 @@ const TREASURY_ADDRESS = "6nE2nkQ4RzHaSx5n2MMBW5f9snevNs8wLBzLmLyrTCnu";
 
 const socket = io(BACKEND_URL, { autoConnect: false });
 
+// Reorder racers to match visual order: Pepe, Wojak, Doge, Chad, Milady
 const racers = [
   { name: "Pepe", gif: pepeGif, icon: icon1 },
   { name: "Wojak", gif: aGif, icon: icon2 },
@@ -65,33 +65,42 @@ const spriteMap = {
   Milady: { sheet: miladySpriteSheet, frameWidth: 112, totalFrames: 34 },
 };
 
-const RAW_PROBS = { 5: 0.15, 4: 0.18, 3: 0.25, 2: 0.4 };
+const RAW_PROBS = { 5: 0.146, 4: 0.166, 3: 0.239, 2: 0.349 }; // Sum ≈ 0.9 with 10% house edge
 function getWeightForMultiplier(m) {
-  return 1 / (RAW_PROBS[m] || 0.4);
+  return RAW_PROBS[m] || 0.8; // Use adjusted probability
+}
+
+function getRaceMultipliers(serverSeed, clientSeed, raceId) {
+  const random = getProvablyFairRandom(
+    serverSeed,
+    clientSeed,
+    raceId,
+    "pool_config"
+  );
+  const useSpecialPool = random < 0.3; // 30% chance for [2, 2, 3, 3, 4/5]
+
+  let basePool;
+  if (useSpecialPool) {
+    const high = random < 0.5 ? 5 : 4; // 50% chance for 5x, 50% for 4x
+    basePool = [2, 2, 3, 3, high];
+  } else {
+    basePool = [2, 3, 4, 5, 2]; // Default balanced pool
+  }
+
+  for (let i = basePool.length - 1; i > 0; i--) {
+    const j = Math.floor(
+      getProvablyFairRandom(serverSeed, clientSeed, raceId, i) * (i + 1)
+    );
+    [basePool[i], basePool[j]] = [basePool[j], basePool[i]];
+  }
+
+  return racers.reduce((m, r, i) => ({ ...m, [r.name]: basePool[i] }), {});
 }
 
 function getProvablyFairRandom(serverSeed, clientSeed, raceId, nonce) {
   const input = `${serverSeed}:${clientSeed}:${raceId}:${nonce}`;
   const hash = sha256(input);
   return parseInt(hash.slice(0, 8), 16) / 0xffffffff;
-}
-
-function getRaceMultipliers(serverSeed, clientSeed, raceId) {
-  const basePool = [2, 2, 2, 3];
-  const random = getProvablyFairRandom(
-    serverSeed,
-    clientSeed,
-    raceId,
-    "high_multiplier"
-  );
-  const high = random < 0.1 ? 5 : 4;
-  const pool = [...basePool, high];
-  for (let i = pool.length - 1; i > 0; i--) {
-    const random = getProvablyFairRandom(serverSeed, clientSeed, raceId, i);
-    const j = Math.floor(random * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
-  }
-  return racers.reduce((m, r, i) => ({ ...m, [r.name]: pool[i] }), {});
 }
 
 function verifyRaceOutcome(
@@ -195,6 +204,8 @@ export default function RaceWithBetting() {
     racers.reduce((acc, r) => ({ ...acc, [r.name]: 0 }), {})
   );
 
+  const [spritesLoaded, setSpritesLoaded] = useState(false);
+
   const countdownRef = useRef(null);
   const animRef = useRef(null);
   const prevLeaderRef = useRef(-1);
@@ -204,6 +215,21 @@ export default function RaceWithBetting() {
   const winnerControls = useAnimation();
 
   const solConnectionRef = useRef(null);
+
+  const positionsRef = useRef(
+    racers.reduce((acc, r) => ({ ...acc, [r.name]: 0 }), {})
+  );
+  const lastPositionsRef = useRef(
+    racers.reduce((acc, r) => ({ ...acc, [r.name]: 0 }), {})
+  );
+  const timeSinceUpdateRef = useRef(0);
+  const spritesRef = useRef({});
+  const frameCtRef = useRef(0);
+  const curFrameRef = useRef(0);
+  const particlesRef = useRef([]);
+  const lastTimeRef = useRef(performance.now());
+
+  const UPDATE_INTERVAL = 1000 / 60; // Assume backend sends at 60Hz
 
   const getSolConnection = () => {
     if (!solConnectionRef.current) {
@@ -228,7 +254,10 @@ export default function RaceWithBetting() {
     }
     try {
       const resp = await window.solana.connect();
-      setWalletAddress(resp.publicKey.toString());
+      const publicKey = resp.publicKey;
+      if (publicKey) {
+        setWalletAddress(publicKey.toString());
+      }
     } catch (e) {
       console.warn("Wallet connect failed", e);
     }
@@ -289,25 +318,48 @@ export default function RaceWithBetting() {
 
         const tx = new Transaction();
 
+        // Handle sender token account creation if not found
         try {
           await getAccount(connection, fromTokenAccount);
         } catch (e) {
-          console.warn("Sender token account does not exist, creating...");
-          tx.add(
-            createAssociatedTokenAccountInstruction(
-              fromPubkey,
-              fromTokenAccount,
-              fromPubkey,
-              tokenMint
-            )
-          );
+          if (e.name === "TokenAccountNotFoundError") {
+            console.warn(
+              "Sender token account not found, creating...",
+              fromTokenAccount.toString()
+            );
+            tx.add(
+              createAssociatedTokenAccountInstruction(
+                fromPubkey,
+                fromTokenAccount,
+                fromPubkey,
+                tokenMint
+              )
+            );
+          } else {
+            throw e;
+          }
         }
 
+        // Handle treasury token account creation if not found
         try {
           await getAccount(connection, toTokenAccount);
         } catch (e) {
-          alert("Treasury token account not initialized");
-          throw new Error("Treasury token account not initialized");
+          if (e.name === "TokenAccountNotFoundError") {
+            console.warn(
+              "Treasury token account not found, creating...",
+              toTokenAccount.toString()
+            );
+            tx.add(
+              createAssociatedTokenAccountInstruction(
+                fromPubkey, // Using bettor as payer to create treasury account (adjust if treasury keypair is available)
+                toTokenAccount,
+                toPubkey,
+                tokenMint
+              )
+            );
+          } else {
+            throw e;
+          }
         }
 
         tx.add(
@@ -391,7 +443,12 @@ export default function RaceWithBetting() {
             txSignature: signature,
             multiplier,
           };
-          setLiveBets((lb) => [betEvent, ...lb].slice(0, 100));
+          setLiveBets((lb) => {
+            const uniqueBets = lb.filter(
+              (existing) => existing.txSignature !== betEvent.txSignature
+            );
+            return [betEvent, ...uniqueBets].slice(0, 100);
+          });
         }
       } catch (e) {
         console.error("placeBetOnchain error", e);
@@ -432,6 +489,9 @@ export default function RaceWithBetting() {
         setIsRacing(false);
         setWinner(null);
         setPositions(racers.reduce((acc, r) => ({ ...acc, [r.name]: 0 }), {}));
+        setPlacedBets({});
+        setLiveBets([]);
+        setBets(racers.reduce((acc, r) => ({ ...acc, [r.name]: "" }), {}));
         return;
       }
       setRaceId(raceState.raceId);
@@ -440,6 +500,12 @@ export default function RaceWithBetting() {
       setBetCountdown(raceState.betCountdown);
       setBettingMultipliers(raceState.multipliers);
       setServerSeedHash(raceState.serverSeedHash);
+
+      if (raceState.phase === PHASES.READY) {
+        setPlacedBets({});
+        setLiveBets([]);
+        setBets(racers.reduce((acc, r) => ({ ...acc, [r.name]: "" }), {}));
+      }
 
       if (countdownRef.current) clearInterval(countdownRef.current);
       if (raceState.phase === PHASES.READY && raceState.readyCountdown > 0) {
@@ -473,19 +539,37 @@ export default function RaceWithBetting() {
         setWinnerIcon(null);
         setIsWaitingForResult(false);
         setPositions(racers.reduce((acc, r) => ({ ...acc, [r.name]: 0 }), {}));
+        lastPositionsRef.current = racers.reduce(
+          (acc, r) => ({ ...acc, [r.name]: 0 }),
+          {}
+        );
+        timeSinceUpdateRef.current = 0;
       }
     });
     socket.on(
       "raceProgress",
       ({ raceId: incomingRaceId, positions: newPositions }) => {
         if (incomingRaceId === raceId) {
+          lastPositionsRef.current = positionsRef.current;
           setPositions(newPositions);
+          timeSinceUpdateRef.current = 0;
         }
       }
     );
     socket.on("betPlaced", (b) => {
       if (b.raceId === raceId) {
-        setLiveBets((lb) => [b, ...lb].slice(0, 100));
+        setLiveBets((lb) => {
+          const isDuplicate = lb.some(
+            (existing) => existing.txSignature === b.txSignature
+          );
+          if (!isDuplicate) {
+            return [b, ...lb.filter((bet) => bet.raceId === raceId)].slice(
+              0,
+              100
+            );
+          }
+          return lb;
+        });
       }
     });
     socket.on("raceResult", ({ raceResult, serverSeed }) => {
@@ -530,81 +614,92 @@ export default function RaceWithBetting() {
     }
   }, [winner, winnerControls]);
 
+  // Load sprites once on mount
   useEffect(() => {
-    if (phase !== PHASES.RACING || !raceId) return;
+    let loadedCt = 0;
+    racers.forEach((r) => {
+      const img = new window.Image();
+      img.src = spriteMap[r.name].sheet;
+      img.onload = () => {
+        spritesRef.current[r.name] = img;
+        loadedCt++;
+        if (loadedCt === racers.length) {
+          setSpritesLoaded(true);
+        }
+      };
+      img.onerror = () => console.warn("sprite load fail", r.name);
+    });
+  }, []);
+
+  // Sync positions state to ref
+  useEffect(() => {
+    positionsRef.current = positions;
+  }, [positions]);
+
+  // Main animation effect
+  useEffect(() => {
+    if (phase !== PHASES.RACING || !raceId || !spritesLoaded) return;
     const canvas = canvasRef.current;
     if (!canvas || !boxRef.current) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const W = (canvas.width = boxRef.current.clientWidth);
-    const H = (canvas.height = boxRef.current.clientHeight);
-    const laneH = H / racers.length;
-    const spriteSz = Math.min(85, laneH * 0.8);
-    const finishX1 = W - 48;
+    canvas.width = boxRef.current.clientWidth;
+    canvas.height = boxRef.current.clientHeight;
 
-    let frameCt = 0,
-      curFrame = 0;
-    let particles = [];
+    function draw(currentTime) {
+      const delta = currentTime - lastTimeRef.current;
+      lastTimeRef.current = currentTime;
 
-    const loaded = {};
-    let loadedCt = 0;
+      timeSinceUpdateRef.current += delta;
 
-    racers.forEach((r) => {
-      const img = new window.Image();
-      img.src = spriteMap[r.name].sheet;
-      img.onload = () => {
-        loaded[r.name] = img;
-        loadedCt++;
-        if (loadedCt === racers.length) {
-          requestAnimationFrame(draw);
-        }
-      };
-      img.onerror = () => console.warn("sprite load fail", r.name);
-    });
+      const W = canvas.width;
+      const H = canvas.height;
+      const laneH = H / racers.length;
+      const spriteSz = Math.min(85, laneH * 0.8);
+      const finishX1 = W - 48;
 
-    function draw() {
       ctx.clearRect(0, 0, W, H);
 
-      for (let laneIndex = 0; laneIndex < racers.length; laneIndex++) {
-        ctx.save();
-        ctx.globalAlpha = 0.9;
+      // Draw lanes (batch fills)
+      for (let i = 0; i < racers.length; i++) {
         ctx.fillStyle =
-          laneIndex % 2 === 0 ? "rgba(138,43,226,0.8)" : "rgba(30,144,255,0.8)";
-        ctx.fillRect(0, laneIndex * laneH, W, laneH);
-        ctx.restore();
+          i % 2 === 0 ? "rgba(138,43,226,0.8)" : "rgba(30,144,255,0.8)";
+        ctx.globalAlpha = 0.9;
+        ctx.fillRect(0, i * laneH, W, laneH);
       }
+      ctx.globalAlpha = 1;
 
-      ctx.save();
+      // Draw dividers
       ctx.strokeStyle = "white";
       ctx.lineWidth = 2;
-      for (let dividerIndex = 1; dividerIndex < racers.length; dividerIndex++) {
-        const y = dividerIndex * laneH;
+      for (let i = 1; i < racers.length; i++) {
+        const y = i * laneH;
         ctx.beginPath();
         ctx.moveTo(0, y);
         ctx.lineTo(W, y);
         ctx.stroke();
       }
-      ctx.restore();
 
-      const pulse = 0.5 + 0.5 * Math.sin((Date.now() / 1000) * 4);
-      ctx.save();
+      // Finish line
+      const pulse = 0.5 + 0.5 * Math.sin(currentTime / 250); // Slower pulse for less computation
       ctx.lineWidth = 8;
       ctx.setLineDash([18, 10]);
       ctx.strokeStyle = `rgba(255,215,0,${pulse})`;
-      [finishX1, finishX1 + 20].forEach((fx) => {
-        ctx.beginPath();
-        ctx.moveTo(fx, 0);
-        ctx.lineTo(fx, H);
-        ctx.stroke();
-      });
+      ctx.beginPath();
+      ctx.moveTo(finishX1, 0);
+      ctx.lineTo(finishX1, H);
+      ctx.stroke();
+      ctx.moveTo(finishX1 + 20, 0);
+      ctx.lineTo(finishX1 + 20, H);
+      ctx.stroke();
       ctx.setLineDash([]);
-      ctx.restore();
 
+      // Leader calculation
       let currentLeader = -1;
       let maxPos = -Infinity;
       racers.forEach((r, i) => {
-        const p = positions[r.name] * (finishX1 - spriteSz * 2);
+        const p = positionsRef.current[r.name] * (finishX1 - spriteSz * 2);
         if (p > maxPos) {
           maxPos = p;
           currentLeader = i;
@@ -618,39 +713,48 @@ export default function RaceWithBetting() {
       }
       prevLeaderRef.current = currentLeader;
 
-      racers.forEach((r, racerIndex) => {
-        const sprite = loaded[r.name];
-        if (!sprite) return;
-        const x = Math.min(
-          positions[r.name] * (finishX1 - spriteSz * 2),
-          finishX1 - spriteSz
-        );
-        const y = racerIndex * laneH + (laneH - spriteSz) / 2;
+      // Interp factor
+      const interpFactor = Math.min(
+        1,
+        timeSinceUpdateRef.current / UPDATE_INTERVAL
+      );
 
-        ctx.save();
-        const len = 10 + Math.abs(positions[r.name]) * 8;
+      racers.forEach((r, i) => {
+        const sprite = spritesRef.current[r.name];
+        if (!sprite) return;
+
+        const lastPos = lastPositionsRef.current[r.name];
+        const currPos = positionsRef.current[r.name];
+        const interpPos = lastPos + (currPos - lastPos) * interpFactor;
+
+        const rawX = interpPos * (finishX1 - spriteSz * 2);
+        const x = Math.min(rawX, finishX1 - spriteSz);
+        const y = i * laneH + (laneH - spriteSz) / 2;
+
+        // Speed line
+        const len = 10 + Math.abs(interpPos) * 8;
         ctx.strokeStyle = "rgba(255,255,255,0.2)";
         ctx.beginPath();
         ctx.moveTo(x, y + spriteSz / 2);
         ctx.lineTo(x - len, y + spriteSz / 2 - 5);
         ctx.stroke();
-        ctx.restore();
 
-        const spinRemaining = spinTimersRef.current[racerIndex];
+        // Spin
         let angle = 0;
+        const spinRemaining = spinTimersRef.current[i];
         if (spinRemaining > 0) {
-          const progress = (30 - spinRemaining + 1) / 30;
+          const progress = (30 - spinRemaining + delta / 16.67) / 30; // Adjust with delta
           angle = progress * Math.PI * 2;
-          spinTimersRef.current[racerIndex] = spinRemaining - 1;
+          spinTimersRef.current[i] = Math.max(0, spinRemaining - delta / 16.67);
         }
 
+        // Draw sprite
         ctx.save();
         ctx.translate(x + spriteSz / 2, y + spriteSz / 2);
         if (angle !== 0) ctx.rotate(angle);
-        ctx.globalAlpha = 1;
         ctx.drawImage(
           sprite,
-          (curFrame % spriteMap[r.name].totalFrames) *
+          (curFrameRef.current % spriteMap[r.name].totalFrames) *
             spriteMap[r.name].frameWidth,
           0,
           spriteMap[r.name].frameWidth,
@@ -662,38 +766,52 @@ export default function RaceWithBetting() {
         );
         ctx.restore();
 
-        particles.push({
-          x: x + spriteSz / 2,
-          y: y + spriteSz,
-          alpha: 1,
-          vx: Math.random() - 0.5,
-          vy: -2,
-        });
+        // Particles (spawn less, update with delta)
+        if (frameCtRef.current % 4 === 0) {
+          particlesRef.current.push({
+            x: x + spriteSz / 2,
+            y: y + spriteSz,
+            alpha: 1,
+            vx: (Math.random() - 0.5) * 2, // Faster spread
+            vy: -1.5,
+          });
+        }
       });
 
-      ctx.save();
-      particles.forEach((p) => {
-        ctx.fillStyle = `rgba(255,215,0,${p.alpha})`;
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
-        ctx.fill();
-        p.x += p.vx;
-        p.y += p.vy;
-        p.alpha -= 0.02;
+      // Particles draw and update
+      particlesRef.current.forEach((p) => {
+        p.x += p.vx * (delta / 16.67);
+        p.y += p.vy * (delta / 16.67);
+        p.alpha -= 0.015 * (delta / 16.67); // Slower fade
+        if (p.alpha > 0) {
+          ctx.fillStyle = `rgba(255,215,0,${p.alpha})`;
+          ctx.fillRect(p.x - 1, p.y - 1, 2, 2);
+        }
       });
-      ctx.restore();
-      particles = particles.filter((p) => p.alpha > 0);
+      particlesRef.current = particlesRef.current.filter((p) => p.alpha > 0);
 
-      frameCt++;
-      if (frameCt % 10 === 0) curFrame++; // Even slower frame change
+      frameCtRef.current++;
+      if (frameCtRef.current % 2 === 0) curFrameRef.current++; // ~30 FPS animation
 
       animRef.current = requestAnimationFrame(draw);
     }
 
+    lastTimeRef.current = performance.now();
+    animRef.current = requestAnimationFrame(draw);
+
     return () => {
       if (animRef.current) cancelAnimationFrame(animRef.current);
     };
-  }, [phase, raceId, positions]);
+  }, [phase, raceId, spritesLoaded]);
+
+  useEffect(() => {
+    if (!isRacing) {
+      frameCtRef.current = 0;
+      curFrameRef.current = 0;
+      particlesRef.current = [];
+      timeSinceUpdateRef.current = 0;
+    }
+  }, [isRacing]);
 
   useEffect(() => {
     if (phase !== PHASES.RACING && canvasRef.current) {
@@ -762,9 +880,7 @@ export default function RaceWithBetting() {
       <div className="w-full flex justify-center px-4 mt-4 ">
         <div
           className="relative w-full max-w-[2400px] h-[50vh] md:h-[60vh] flex items-center"
-          ref={(el) => {
-            boxRef.current = el;
-          }}
+          ref={boxRef}
         >
           <div className="absolute inset-0 pointer-events-none">
             {laneHeights.length === displayRacers.length &&
@@ -787,9 +903,7 @@ export default function RaceWithBetting() {
           </div>
 
           <motion.canvas
-            ref={(el) => {
-              canvasRef.current = el;
-            }}
+            ref={canvasRef}
             className="race-canvas rounded-md shadow-lg"
             style={{ zIndex: 20, width: "100%", height: "100%" }}
             animate={trackControls}
@@ -811,6 +925,15 @@ export default function RaceWithBetting() {
           {phase === PHASES.BETTING && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-40 pointer-events-none">
               <div className="bg-[rgba(10,10,10,0.7)] rounded-2xl p-6 flex flex-col items-center gap-2">
+                <div className="text-xl font-bold text-red-700 flex items-center gap-2">
+                  WARNING!
+                </div>
+                <div className="text-sm font-bold text-white flex items-center gap-2">
+                  DO NOT PROCEED ANY TX IF NOT ON BETTING PHASE.
+                </div>
+                <div className="text-sm font-bold text-white flex items-center gap-2">
+                  THIS WILL LEAD TO LOSE OF FUNDS
+                </div>
                 <div className="text-2xl font-bold text-white flex items-center gap-2">
                   🎯 Betting Phase
                 </div>
@@ -1000,15 +1123,21 @@ export default function RaceWithBetting() {
           {liveBets.length > 0 && (
             <div className="mt-2 bg-[rgba(0,0,0,0.3)] rounded p-2 text-xs text-white overflow-y-auto max-h-32">
               <div className="font-semibold mb-1">Live Bets</div>
-              {liveBets.slice(0, 5).map((b) => (
-                <div key={b.txSignature} className="flex justify-between mb-1">
-                  <div>
-                    {b.bettorWallet?.slice(0, 4)}…{b.bettorWallet?.slice(-4)} →{" "}
-                    {b.targetName}
+              {liveBets
+                .filter((bet) => bet.raceId === raceId)
+                .slice(0, 5)
+                .map((b) => (
+                  <div
+                    key={`${b.txSignature}-${b.raceId}`}
+                    className="flex justify-between mb-1"
+                  >
+                    <div>
+                      {b.bettorWallet?.slice(0, 4)}…{b.bettorWallet?.slice(-4)}{" "}
+                      → {b.targetName}
+                    </div>
+                    <div>{b.amount} TOKENS</div>
                   </div>
-                  <div>{b.amount} TOKENS</div>
-                </div>
-              ))}
+                ))}
             </div>
           )}
         </div>
@@ -1028,7 +1157,7 @@ export default function RaceWithBetting() {
                 key={idx}
                 className="history-item bg-[rgba(40,40,70,0.9)] rounded-md p-2 flex items-center gap-2 text-xs"
               >
-                <div className="history-time flex-[0_0_60px] text-gray-400">
+                <div className="history-time flex-[0_0-60px] text-gray-400">
                   {h.timestamp
                     ? new Date(h.timestamp).toLocaleTimeString("en-US", {
                         hour12: false,

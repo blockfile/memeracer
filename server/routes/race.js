@@ -25,7 +25,7 @@ const {
 } = require("@solana/spl-token");
 
 const RAW_PROBS = { 5: 0.15, 4: 0.18, 3: 0.25, 2: 0.4 };
-const racers = ["Pepe", "Wojak", "Doge", "Chad", "Milady"];
+const racers = ["Milady", "Chad", "Doge", "Wojak", "Pepe"];
 const connection = new Connection(
   process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com",
   { commitment: "confirmed" }
@@ -108,18 +108,28 @@ router.get("/next", async (req, res) => {
 router.post("/init", async (req, res) => {
   try {
     const { raceId, multipliers } = req.body;
-    if (!raceId || !multipliers)
-      return res.status(400).json({ error: "Missing data" });
+    if (!raceId) return res.status(400).json({ error: "Missing raceId" });
 
-    const validRacers = ["Pepe", "Wojak", "Doge", "Chad", "Milady"];
+    const validRacers = ["Pepe", "Wojak", "Doge", "Chad", "Milady"]; // Align with other files
     const validMultipliers = [2, 3, 4, 5];
-    const multiplierKeys = Object.keys(multipliers);
+
+    let computedMultipliers = multipliers;
     if (
-      multiplierKeys.length !== validRacers.length ||
-      !multiplierKeys.every((key) => validRacers.includes(key)) ||
-      !Object.values(multipliers).every((m) => validMultipliers.includes(m))
+      !multipliers ||
+      Object.keys(multipliers).length !== validRacers.length
     ) {
-      return res.status(400).json({ error: "Invalid multipliers" });
+      const serverSeed = crypto.randomBytes(32).toString("hex");
+      computedMultipliers = getRaceMultipliers(serverSeed, raceId, raceId); // Use raceId as clientSeed
+      console.log("Generated multipliers:", computedMultipliers);
+    } else {
+      const multiplierKeys = Object.keys(multipliers);
+      if (
+        multiplierKeys.length !== validRacers.length ||
+        !multiplierKeys.every((key) => validRacers.includes(key)) ||
+        !Object.values(multipliers).every((m) => validMultipliers.includes(m))
+      ) {
+        return res.status(400).json({ error: "Invalid multipliers" });
+      }
     }
 
     let pending = await PendingRace.findOne({ raceId });
@@ -137,14 +147,14 @@ router.post("/init", async (req, res) => {
       .digest("hex");
     pending = new PendingRace({
       raceId,
-      multipliers,
+      multipliers: new Map(Object.entries(computedMultipliers)),
       serverSeed,
       serverSeedHash,
     });
     await pending.save();
     res.status(201).json({
       raceId,
-      multipliers,
+      multipliers: computedMultipliers,
       serverSeedHash,
     });
   } catch (e) {
@@ -289,7 +299,8 @@ async function payOutWinnersOnchain(raceResult, io) {
     const { blockhash } = await connection.getLatestBlockhash("confirmed");
     tx.recentBlockhash = blockhash;
     tx.sign(treasury);
-    const signature = await connection.sendRawTransaction(tx.serialize());
+    const raw = tx.serialize();
+    const signature = await connection.sendRawTransaction(raw);
     await connection.confirmTransaction(signature, "confirmed");
     console.log("Created treasury token account:", signature);
   }
@@ -316,18 +327,27 @@ async function payOutWinnersOnchain(raceResult, io) {
         toPubkey
       );
 
+      const tx = new Transaction();
+
       try {
         await getAccount(connection, toTokenAccount);
       } catch (e) {
         console.warn(
-          `Recipient token account for ${bettorWallet} does not exist, skipping payout`
+          `Recipient token account for ${bettorWallet} does not exist, creating...`
         );
-        continue;
+        tx.add(
+          createAssociatedTokenAccountInstruction(
+            treasuryPubkey, // payer
+            toTokenAccount,
+            toPubkey,
+            tokenMint
+          )
+        );
       }
 
       const lamports = Math.round(totalPayout * 1e9);
 
-      const tx = new Transaction().add(
+      tx.add(
         createTransferInstruction(
           treasuryTokenAccount,
           toTokenAccount,
