@@ -28,6 +28,8 @@ const RaceResultSchema = new mongoose.Schema(
     },
     losers: [LoserSchema],
     bets: [BetSchema],
+    serverSeed: { type: String, required: true },
+    serverSeedHash: { type: String, required: true },
   },
   { timestamps: true }
 );

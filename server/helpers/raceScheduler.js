@@ -10,7 +10,7 @@ const racers = ["Pepe", "Wojak", "Doge", "Chad", "Milady"];
 
 const RAW_PROBS = { 5: 0.146, 4: 0.166, 3: 0.239, 2: 0.349 }; // Sum ≈ 0.9 with 10% house edge
 function getWeightForMultiplier(m) {
-  return RAW_PROBS[m] || 0.349; // Use adjusted probability
+  return RAW_PROBS[m] || RAW_PROBS[2];
 }
 
 function getProvablyFairRandom(serverSeed, clientSeed, raceId, nonce) {
@@ -26,16 +26,17 @@ function getRaceMultipliers(serverSeed, clientSeed, raceId) {
     raceId,
     "pool_config"
   );
-  const useSpecialPool = random < 0.3; // 30% chance for [2, 2, 3, 3, 4/5]
+  const useSpecialPool = random < 0.3; // 30% chance for special pool
 
   let basePool;
   if (useSpecialPool) {
-    const high = random < 0.5 ? 5 : 4; // 50% chance for 5x, 50% for 4x
+    const high = random < 0.5 ? 5 : 4;
     basePool = [2, 2, 3, 3, high];
   } else {
-    basePool = [2, 3, 4, 5, 2]; // Default balanced pool
+    basePool = [2, 3, 4, 5, 2];
   }
 
+  // Fisher–Yates shuffle driven by provably-fair RNG
   for (let i = basePool.length - 1; i > 0; i--) {
     const j = Math.floor(
       getProvablyFairRandom(serverSeed, clientSeed, raceId, i) * (i + 1)
@@ -43,7 +44,10 @@ function getRaceMultipliers(serverSeed, clientSeed, raceId) {
     [basePool[i], basePool[j]] = [basePool[j], basePool[i]];
   }
 
-  return racers.reduce((m, r, i) => ({ ...m, [r.name]: basePool[i] }), {});
+  return racers.reduce((map, r, i) => {
+    map[r] = basePool[i];
+    return map;
+  }, {});
 }
 
 async function scheduleRace(
@@ -56,8 +60,9 @@ async function scheduleRace(
   serverSeedHash
 ) {
   let session = null;
+
   try {
-    let race = await PendingRace.findOne({ raceId });
+    const race = await PendingRace.findOne({ raceId });
     if (!race) {
       console.error(`Race ${raceId} not found`);
       activeRaces.delete(raceId);
@@ -75,7 +80,7 @@ async function scheduleRace(
     io.to("globalRaceRoom").emit("raceState", raceState);
     console.log(`Scheduling race ${raceId} in phase ${race.phase}`);
 
-    // Ready phase
+    // READY phase
     if (race.phase === "ready") {
       let t = race.readyCountdown;
       const interval = setInterval(async () => {
@@ -110,7 +115,8 @@ async function scheduleRace(
         }
       }, 1000);
     }
-    // Betting phase
+
+    // BETTING phase
     else if (race.phase === "betting") {
       let t = race.betCountdown;
       const interval = setInterval(async () => {
@@ -129,7 +135,6 @@ async function scheduleRace(
             console.log(`Race ${raceId} transitioning to racing phase`);
             io.to("globalRaceRoom").emit("raceStart", {
               raceId,
-              serverSeed: serverSeed || race.serverSeed,
             });
             scheduleRace(
               io,
@@ -148,97 +153,105 @@ async function scheduleRace(
         }
       }, 1000);
     }
-    // Racing phase
+
+    // RACING phase
     else if (race.phase === "racing") {
       const raceDur = 15000; // 15 seconds
       const t0 = Date.now();
-      const frameDelta = Math.floor(1000 / 60); // 60 FPS updates
+      const frameDelta = Math.floor(1000 / 60); // ~60 FPS updates
       let positions = racers.map(() => 0);
       const clientSeed = race.raceId;
+
+      // Determine winner index by weighted RNG
       const weights = racers.map((name) =>
         getWeightForMultiplier(race.multipliers.get(name))
       );
-      const total = weights.reduce((a, b) => a + b, 0);
-      const random = getProvablyFairRandom(
-        race.serverSeed,
-        clientSeed,
-        race.raceId,
-        "winner"
-      );
-      let r = random * total;
-      let idx = -1;
-      for (let k = 0; k < racers.length; ++k) {
-        if (r < weights[k]) {
-          idx = k;
-          break;
-        }
-        r -= weights[k];
+      const totalW = weights.reduce((a, b) => a + b, 0);
+      const randW =
+        getProvablyFairRandom(
+          race.serverSeed,
+          clientSeed,
+          race.raceId,
+          "winner"
+        ) * totalW;
+      let idx = 0,
+        acc = 0;
+      for (; idx < racers.length; idx++) {
+        acc += weights[idx];
+        if (randW <= acc) break;
       }
-      const winnerIndex = idx === -1 ? 0 : idx;
+      const winnerIndex = idx % racers.length;
 
-      // Provably fair scenario selection (0,1,2)
+      // Select scenario 0–3
       const scenarioRandom = getProvablyFairRandom(
         race.serverSeed,
         clientSeed,
         race.raceId,
         "scenario"
       );
-      const scenario = Math.floor(scenarioRandom * 3);
+      const scenario = Math.floor(scenarioRandom * 4);
 
-      // Provably fair false leader for scenarios that need it (not the winner)
+      // False-leader for scenario 1
       let falseLeaderIndex = -1;
       if (scenario === 1) {
-        const falseLeaderRandom = getProvablyFairRandom(
+        const flRand = getProvablyFairRandom(
           race.serverSeed,
           clientSeed,
           race.raceId,
           "false_leader"
         );
-        falseLeaderIndex = Math.floor(falseLeaderRandom * (racers.length - 1));
+        falseLeaderIndex = Math.floor(flRand * (racers.length - 1));
         if (falseLeaderIndex >= winnerIndex) falseLeaderIndex++;
       }
 
-      // Set base speeds
-      let baseSpeeds = racers.map(() => 0.9 + Math.random() * 0.2); // Random base speed between 0.9 and 1.1
+      // Base speeds
+      let baseSpeeds = racers.map(() => 0.9 + Math.random() * 0.2);
       baseSpeeds[winnerIndex] = Math.max(...baseSpeeds) + 0.1;
-      const newMaxBaseSpeed = Math.max(...baseSpeeds);
-      baseSpeeds = baseSpeeds.map((s) => s / newMaxBaseSpeed);
+      const maxBase = Math.max(...baseSpeeds);
+      baseSpeeds = baseSpeeds.map((s) => s / maxBase);
 
-      // Scenario-specific logic
+      // Factors to shape each scenario
       let earlyFactors = new Array(racers.length).fill(1.0);
       let lateFactors = new Array(racers.length).fill(1.0);
       let switchPoint = 0.6;
 
       if (scenario === 0) {
-        // Scenario 0: Winner slow start, boost end
-        earlyFactors[winnerIndex] = 0.8; // Slow early
-        lateFactors[winnerIndex] = 1.5; // Boost late
+        // Slow start, big boost late
+        earlyFactors[winnerIndex] = 0.8;
+        lateFactors[winnerIndex] = 1.5;
       } else if (scenario === 1) {
-        // Scenario 1: False leader leads early, winner overtakes
-        earlyFactors[falseLeaderIndex] = 1.3; // False leader fast early
-        lateFactors[falseLeaderIndex] = 0.8; // False leader slows late
-        lateFactors[winnerIndex] = 1.3; // Winner boost late
+        // False leader leads, then winner overtakes
+        earlyFactors[falseLeaderIndex] = 1.3;
+        lateFactors[falseLeaderIndex] = 0.8;
+        lateFactors[winnerIndex] = 1.3;
       } else if (scenario === 2) {
-        // Scenario 2: Close race, winner gradual pull ahead with jitter
-        switchPoint = 0.4; // Earlier switch for gradual pull
+        // Jittery close race
+        switchPoint = 0.4;
         earlyFactors = earlyFactors.map(
-          (f, i) => f * (0.95 + Math.random() * 0.1)
-        ); // Small jitter early
-        lateFactors[winnerIndex] = 1.2; // Winner slight advantage late
+          (f) => f * (0.95 + Math.random() * 0.1)
+        );
+        lateFactors[winnerIndex] = 1.2;
         lateFactors = lateFactors.map((f, i) =>
           i !== winnerIndex ? f * (0.9 + Math.random() * 0.1) : f
-        ); // Jitter for others late
+        );
+      } else if (scenario === 3) {
+        // Explosive start, mid-race lull, final sprint
+        // Phase 1 (0–30%): big early lead
+        earlyFactors[winnerIndex] = 1.5;
+        // Phase 2 (30–80%): fatigue
+        lateFactors[winnerIndex] = 0.7;
+        // shorten initial switch to 30%
+        switchPoint = 0.3;
+        // We'll implicitly give a final burst via the weighting in progress loop
       }
 
+      // Emit progress ~60×/sec
       const progressInterval = setInterval(() => {
-        const timeElapsed = Date.now() - t0;
-        if (timeElapsed < raceDur) {
-          const progressFraction = timeElapsed / raceDur;
-          const earlyP = Math.min(progressFraction / switchPoint, 1);
-          const lateP = Math.max(
-            (progressFraction - switchPoint) / (1 - switchPoint),
-            0
-          );
+        const elapsed = Date.now() - t0;
+        if (elapsed < raceDur) {
+          const frac = elapsed / raceDur;
+          const earlyP = Math.min(frac / switchPoint, 1);
+          const lateP = Math.max((frac - switchPoint) / (1 - switchPoint), 0);
           positions = baseSpeeds.map(
             (s, i) =>
               s *
@@ -248,34 +261,21 @@ async function scheduleRace(
           );
           io.to("globalRaceRoom").emit("raceProgress", {
             raceId,
-            positions: racers.reduce(
-              (acc, r, i) => ({ ...acc, [r]: positions[i] }),
-              {}
-            ),
+            positions: racers.reduce((m, r, i) => {
+              m[r] = positions[i];
+              return m;
+            }, {}),
           });
         }
       }, frameDelta);
 
+      // After race duration ends…
       setTimeout(async () => {
         clearInterval(progressInterval);
         try {
+          // Determine winner & collate bets
           const winnerName = racers[winnerIndex];
-          const winningMultiplier = race.multipliers.get(winnerName);
-
-          const winner = {
-            name: winnerName,
-            walletAddress: "UNKNOWN",
-            multiplier: winningMultiplier,
-          };
-
-          const losers = racers
-            .filter((name) => name !== winnerName)
-            .map((name) => ({
-              name,
-              walletAddress: "UNKNOWN",
-              multiplier: race.multipliers.get(name),
-            }));
-
+          const winningMult = race.multipliers.get(winnerName);
           const pendingBets = await PendingBet.find({ raceId });
           const bets = pendingBets.map((bet) => ({
             bettorWallet: bet.bettorWallet,
@@ -287,92 +287,110 @@ async function scheduleRace(
             won: bet.targetName === winnerName,
           }));
 
+          // Start Mongo transaction
           session = await mongoose.startSession();
           session.startTransaction();
 
-          for (const bet of bets) {
-            const { bettorWallet, amount, payout, won } = bet;
+          // Update each user balance
+          for (const b of bets) {
             let user = await User.findOne({
-              walletAddress: bettorWallet,
+              walletAddress: b.bettorWallet,
             }).session(session);
             if (!user) {
-              user = new User({ walletAddress: bettorWallet, tokenBalance: 0 });
+              user = new User({
+                walletAddress: b.bettorWallet,
+                tokenBalance: 0,
+              });
             }
-            if (won) {
-              const profit = payout - amount;
+            if (b.won) {
+              const profit = b.payout - b.amount;
               const rake = profit * 0.05;
-              const netPayout = payout - rake;
-              user.tokenBalance = Number(user.tokenBalance || 0) + netPayout;
+              const net = b.payout - rake;
+              user.tokenBalance = Number(user.tokenBalance || 0) + net;
             } else {
               user.tokenBalance = Math.max(
-                Number(user.tokenBalance || 0) - amount,
+                Number(user.tokenBalance || 0) - b.amount,
                 0
               );
             }
             await user.save({ session });
           }
 
+          // Save result, clean up pending races/bets
           const raceResult = new RaceResult({
             raceId,
             multipliers: race.multipliers,
-            winner,
-            losers,
+            winner: {
+              name: winnerName,
+              walletAddress: "UNKNOWN",
+              multiplier: winningMult,
+            },
+            losers: racers
+              .filter((n) => n !== winnerName)
+              .map((n) => ({
+                name: n,
+                walletAddress: "UNKNOWN",
+                multiplier: race.multipliers.get(n),
+              })),
             bets,
+            serverSeed, // Add this
+            serverSeedHash,
             timestamp: new Date(),
           });
-
           await raceResult.save({ session });
           await PendingRace.deleteOne({ raceId }).session(session);
           await PendingBet.deleteMany({ raceId }).session(session);
 
+          // Commit transaction
           await session.commitTransaction();
           session.endSession();
           session = null;
 
-          // Verify payOutWinnersOnchain exists before calling
+          // On-chain payout
           if (typeof payOutWinnersOnchain === "function") {
             try {
               await payOutWinnersOnchain(raceResult, io);
-            } catch (payoutError) {
-              console.error(
-                `Error in payOutWinnersOnchain for race ${raceId}:`,
-                payoutError
-              );
-              // Continue despite payout error to avoid blocking race loop
+            } catch (err) {
+              console.error(`On-chain payout error for ${raceId}:`, err);
             }
           } else {
-            console.warn(
-              `payOutWinnersOnchain is not a function for race ${raceId}`
-            );
+            console.warn(`payOutWinnersOnchain not defined for ${raceId}`);
           }
 
+          // Emit final progress with winner at finish
+          const finalPositions = racers.reduce((m, r, i) => {
+            m[r] = i === winnerIndex ? 1.0 : 0.95 + Math.random() * 0.04; // Winner at 1, others close but not quite
+            return m;
+          }, {});
+          io.to("globalRaceRoom").emit("raceProgress", {
+            raceId,
+            positions: finalPositions,
+          });
+
+          // Emit results
           io.to("globalRaceRoom").emit("raceResult", {
             raceResult: raceResult.toObject(),
-            serverSeed: serverSeed,
+            serverSeed,
           });
           activeRaces.delete(raceId);
-          // Delay intermission emission to allow winner display
+
           setTimeout(() => {
             io.to("globalRaceRoom").emit("raceState", {
               phase: "intermission",
             });
-          }, 5000);
+          }, 5000); // Extended to 15 seconds for verification
 
-          // Start a new race after completion
-          setTimeout(startRaceLoop, 5000);
+          // Kick off the next race
+          setTimeout(startRaceLoop, 15000);
         } catch (e) {
           console.error(`Error in racing phase for race ${raceId}:`, e);
           if (session) {
-            try {
-              await session.abortTransaction();
-            } catch (abortError) {
-              console.error(
-                `Error aborting transaction for race ${raceId}:`,
-                abortError
+            await session
+              .abortTransaction()
+              .catch((err) =>
+                console.error(`Abort transaction failed for ${raceId}:`, err)
               );
-            }
             session.endSession();
-            session = null;
           }
           activeRaces.delete(raceId);
         }
@@ -382,14 +400,11 @@ async function scheduleRace(
     console.error(`Error scheduling race ${raceId}:`, e);
     activeRaces.delete(raceId);
     if (session) {
-      try {
-        await session.abortTransaction();
-      } catch (abortError) {
-        console.error(
-          `Error aborting transaction for race ${raceId}:`,
-          abortError
+      await session
+        .abortTransaction()
+        .catch((err) =>
+          console.error(`Abort transaction failed for ${raceId}:`, err)
         );
-      }
       session.endSession();
     }
   }

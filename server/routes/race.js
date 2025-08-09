@@ -1,4 +1,3 @@
-// routes/race.js
 require("dotenv").config();
 const express = require("express");
 const router = express.Router();
@@ -24,8 +23,9 @@ const {
   createAssociatedTokenAccountInstruction,
 } = require("@solana/spl-token");
 
+// Constants
 const RAW_PROBS = { 5: 0.15, 4: 0.18, 3: 0.25, 2: 0.4 };
-const racers = ["Milady", "Chad", "Doge", "Wojak", "Pepe"];
+const racers = ["Pepe", "Wojak", "Doge", "Chad", "Milady"];
 const connection = new Connection(
   process.env.SOLANA_RPC_URL || "https://api.devnet.solana.com",
   { commitment: "confirmed" }
@@ -67,25 +67,30 @@ function getProvablyFairRandom(serverSeed, clientSeed, raceId, nonce) {
 }
 
 function getRaceMultipliers(serverSeed, clientSeed, raceId) {
-  const basePool = [2, 2, 2, 3];
   const random = getProvablyFairRandom(
     serverSeed,
     clientSeed,
     raceId,
-    "high_multiplier"
+    "pool_config"
   );
-  const high = random < 0.1 ? 5 : 4;
-  const pool = [...basePool, high];
-  for (let i = pool.length - 1; i > 0; i--) {
-    const random = getProvablyFairRandom(serverSeed, clientSeed, raceId, i);
-    const j = Math.floor(random * (i + 1));
-    [pool[i], pool[j]] = [pool[j], pool[i]];
+  const useSpecialPool = random < 0.3; // 20% chance for special pool
+
+  let basePool;
+  if (useSpecialPool) {
+    const high = random < 0.5 ? 5 : 4; // 50% chance for 5x, 50% for 4x
+    basePool = [2, 2, 3, 3, high];
+  } else {
+    basePool = [2, 3, 4, 2, 2]; // Default balanced pool
   }
-  const m = {};
-  racers.forEach((name, i) => {
-    m[name] = pool[i];
-  });
-  return m;
+
+  for (let i = basePool.length - 1; i > 0; i--) {
+    const j = Math.floor(
+      getProvablyFairRandom(serverSeed, clientSeed, raceId, i) * (i + 1)
+    );
+    [basePool[i], basePool[j]] = [basePool[j], basePool[i]];
+  }
+
+  return racers.reduce((m, r, i) => ({ ...m, [r]: basePool[i] }), {});
 }
 
 router.get("/next", async (req, res) => {
@@ -110,7 +115,7 @@ router.post("/init", async (req, res) => {
     const { raceId, multipliers } = req.body;
     if (!raceId) return res.status(400).json({ error: "Missing raceId" });
 
-    const validRacers = ["Pepe", "Wojak", "Doge", "Chad", "Milady"]; // Align with other files
+    const validRacers = ["Pepe", "Wojak", "Doge", "Chad", "Milady"];
     const validMultipliers = [2, 3, 4, 5];
 
     let computedMultipliers = multipliers;
@@ -337,7 +342,7 @@ async function payOutWinnersOnchain(raceResult, io) {
         );
         tx.add(
           createAssociatedTokenAccountInstruction(
-            treasuryPubkey, // payer
+            treasuryPubkey,
             toTokenAccount,
             toPubkey,
             tokenMint
@@ -417,6 +422,37 @@ router.get("/result/:raceId", async (req, res) => {
   } catch (e) {
     console.error("Specific result error:", e);
     res.status(500).json({ error: "Server error" });
+  }
+});
+
+router.get("/payouts", async (req, res) => {
+  try {
+    const results = await RaceResult.find({
+      "bets.won": true,
+      "bets.payoutTxSignature": { $exists: true, $ne: null },
+    })
+      .sort({ timestamp: -1 })
+      .limit(50)
+      .lean();
+
+    const payouts = results.flatMap((result) =>
+      result.bets
+        .filter((bet) => bet.won && bet.payoutTxSignature)
+        .map((bet) => ({
+          raceId: result.raceId,
+          timestamp: result.timestamp,
+          winnerName: result.winner.name,
+          bettorWallet: bet.bettorWallet,
+          amount: bet.payout, // Net payout after rake
+          payoutTxSignature: bet.payoutTxSignature,
+          treasuryAddress: TREASURY_ADDRESS,
+        }))
+    );
+
+    res.json(payouts);
+  } catch (e) {
+    console.error("Payouts fetch error:", e);
+    res.status(500).json({ error: "Failed to fetch payouts" });
   }
 });
 

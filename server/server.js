@@ -1,4 +1,3 @@
-// server.js
 require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
@@ -9,7 +8,11 @@ const path = require("path");
 const crypto = require("crypto");
 
 const userRoutes = require("./routes/user");
-const { router: raceRoutes, getRaceMultipliers } = require("./routes/race");
+const {
+  router: raceRoutes,
+  getRaceMultipliers,
+  payOutWinnersOnchain,
+} = require("./routes/race");
 const PendingRace = require("./models/PendingRace");
 const { scheduleRace } = require("./helpers/raceScheduler");
 
@@ -78,20 +81,22 @@ async function startRaceLoop() {
       if (pending && !pending.serverSeed) {
         // Update existing pending race if incomplete
         pending.raceId = raceId;
-        pending.multipliers = multipliers;
+        pending.multipliers = new Map(Object.entries(multipliers));
         pending.phase = "ready";
         pending.readyCountdown = 5;
         pending.betCountdown = 0;
+        pending.resultCountdown = 0;
         pending.serverSeed = serverSeed;
         pending.serverSeedHash = serverSeedHash;
         await pending.save();
       } else {
         pending = new PendingRace({
           raceId,
-          multipliers,
+          multipliers: new Map(Object.entries(multipliers)),
           phase: "ready",
           readyCountdown: 5,
           betCountdown: 0,
+          resultCountdown: 0,
           serverSeed,
           serverSeedHash,
         });
@@ -154,6 +159,7 @@ io.on("connection", (socket) => {
         phase: pending.phase,
         readyCountdown: pending.readyCountdown,
         betCountdown: pending.betCountdown,
+        resultCountdown: pending.resultCountdown,
         multipliers: Object.fromEntries(pending.multipliers),
         serverSeedHash: pending.serverSeedHash,
       };

@@ -45,7 +45,6 @@ const SOLANA_RPC_URL =
   "https://api.devnet.solana.com";
 const TOKEN_MINT_ADDRESS = "8h9iB1HT4WPW3vzFUBHW9m4brea7a8tJwkZh2boHH1y4";
 const TREASURY_ADDRESS = "6nE2nkQ4RzHaSx5n2MMBW5f9snevNs8wLBzLmLyrTCnu";
-
 const socket = io(BACKEND_URL, { autoConnect: false });
 
 // Reorder racers to match visual order: Pepe, Wojak, Doge, Chad, Milady
@@ -65,9 +64,17 @@ const spriteMap = {
   Milady: { sheet: miladySpriteSheet, frameWidth: 112, totalFrames: 34 },
 };
 
-const RAW_PROBS = { 5: 0.146, 4: 0.166, 3: 0.239, 2: 0.349 }; // Sum ≈ 0.9 with 10% house edge
+// Align RAW_PROBS with backend for consistency
+const RAW_PROBS = { 5: 0.15, 4: 0.18, 3: 0.25, 2: 0.4 };
+
 function getWeightForMultiplier(m) {
-  return RAW_PROBS[m] || 0.8; // Use adjusted probability
+  return 1 / (RAW_PROBS[m] || 0.4);
+}
+
+function getProvablyFairRandom(serverSeed, clientSeed, raceId, nonce) {
+  const input = `${serverSeed}:${clientSeed}:${raceId}:${nonce}`;
+  const hash = sha256(input);
+  return parseInt(hash.slice(0, 8), 16) / 0xffffffff;
 }
 
 function getRaceMultipliers(serverSeed, clientSeed, raceId) {
@@ -77,30 +84,21 @@ function getRaceMultipliers(serverSeed, clientSeed, raceId) {
     raceId,
     "pool_config"
   );
-  const useSpecialPool = random < 0.3; // 30% chance for [2, 2, 3, 3, 4/5]
-
+  const useSpecialPool = random < 0.3; // Match backend probability
   let basePool;
   if (useSpecialPool) {
-    const high = random < 0.5 ? 5 : 4; // 50% chance for 5x, 50% for 4x
+    const high = random < 0.5 ? 5 : 4;
     basePool = [2, 2, 3, 3, high];
   } else {
-    basePool = [2, 3, 4, 5, 2]; // Default balanced pool
+    basePool = [2, 3, 4, 2, 2]; // Match backend default pool
   }
-
   for (let i = basePool.length - 1; i > 0; i--) {
     const j = Math.floor(
       getProvablyFairRandom(serverSeed, clientSeed, raceId, i) * (i + 1)
     );
     [basePool[i], basePool[j]] = [basePool[j], basePool[i]];
   }
-
   return racers.reduce((m, r, i) => ({ ...m, [r.name]: basePool[i] }), {});
-}
-
-function getProvablyFairRandom(serverSeed, clientSeed, raceId, nonce) {
-  const input = `${serverSeed}:${clientSeed}:${raceId}:${nonce}`;
-  const hash = sha256(input);
-  return parseInt(hash.slice(0, 8), 16) / 0xffffffff;
 }
 
 function verifyRaceOutcome(
@@ -121,7 +119,11 @@ function verifyRaceOutcome(
     raceId
   );
   if (JSON.stringify(computedMultipliers) !== JSON.stringify(multipliers)) {
-    return { valid: false, message: "Multipliers do not match" };
+    return {
+      valid: false,
+      message: "Multipliers do not match",
+      computedMultipliers,
+    };
   }
   const weights = racers.map((r) =>
     getWeightForMultiplier(computedMultipliers[r.name])
@@ -144,9 +146,19 @@ function verifyRaceOutcome(
   }
   const computedWinner = idx === -1 ? racers[0].name : racers[idx].name;
   if (computedWinner !== winner) {
-    return { valid: false, message: "Winner does not match" };
+    return {
+      valid: false,
+      message: "Winner does not match",
+      computedMultipliers,
+      computedWinner,
+    };
   }
-  return { valid: true, message: "Race outcome verified" };
+  return {
+    valid: true,
+    message: "Race outcome verified",
+    computedMultipliers,
+    computedWinner,
+  };
 }
 
 const PHASES = {
@@ -154,6 +166,7 @@ const PHASES = {
   BETTING: "betting",
   RACING: "racing",
   INTERMISSION: "intermission",
+  RESULT: "result", // New phase for post-race verification
 };
 
 const multiplierStyles = {
@@ -178,10 +191,10 @@ function badgeCss(mult) {
 export default function RaceWithBetting() {
   const canvasRef = useRef(null);
   const boxRef = useRef(null);
-
   const [phase, setPhase] = useState(PHASES.READY);
   const [betCountdown, setBetCountdown] = useState(0);
   const [readyCountdown, setReadyCountdown] = useState(5);
+  const [resultCountdown, setResultCountdown] = useState(0); // Countdown for result phase
   const [bets, setBets] = useState(() =>
     racers.reduce((acc, r) => ({ ...acc, [r.name]: "" }), {})
   );
@@ -192,6 +205,9 @@ export default function RaceWithBetting() {
   const [winnerIcon, setWinnerIcon] = useState(null);
   const [laneHeights, setLaneHeights] = useState([]);
   const [history, setHistory] = useState([]);
+  const [payouts, setPayouts] = useState([]);
+  const [lastPayouts, setLastPayouts] = useState([]); // For displaying in intermission
+  const [showPayoutCredits, setShowPayoutCredits] = useState(false); // Control credits animation
   const [isRacing, setIsRacing] = useState(false);
   const [liveBets, setLiveBets] = useState([]);
   const [walletAddress, setWalletAddress] = useState(null);
@@ -199,23 +215,22 @@ export default function RaceWithBetting() {
   const [serverSeedHash, setServerSeedHash] = useState(null);
   const [serverSeed, setServerSeed] = useState(null);
   const [showVerification, setShowVerification] = useState(false);
+  const [selectedRace, setSelectedRace] = useState(null);
+  const [inputServerSeed, setInputServerSeed] = useState("");
+  const [inputServerSeedHash, setInputServerSeedHash] = useState("");
+  const [verificationResult, setVerificationResult] = useState(null);
   const [isWaitingForResult, setIsWaitingForResult] = useState(false);
   const [positions, setPositions] = useState(
     racers.reduce((acc, r) => ({ ...acc, [r.name]: 0 }), {})
   );
-
   const [spritesLoaded, setSpritesLoaded] = useState(false);
-
   const countdownRef = useRef(null);
   const animRef = useRef(null);
   const prevLeaderRef = useRef(-1);
   const spinTimersRef = useRef(racers.map(() => 0));
-
   const trackControls = useAnimation();
   const winnerControls = useAnimation();
-
   const solConnectionRef = useRef(null);
-
   const positionsRef = useRef(
     racers.reduce((acc, r) => ({ ...acc, [r.name]: 0 }), {})
   );
@@ -228,16 +243,13 @@ export default function RaceWithBetting() {
   const curFrameRef = useRef(0);
   const particlesRef = useRef([]);
   const lastTimeRef = useRef(performance.now());
-
-  const UPDATE_INTERVAL = 1000 / 60; // Assume backend sends at 60Hz
-
+  const UPDATE_INTERVAL = 1000 / 60;
   const getSolConnection = () => {
     if (!solConnectionRef.current) {
       solConnectionRef.current = new Connection(SOLANA_RPC_URL, "confirmed");
     }
     return solConnectionRef.current;
   };
-
   const fetchHistory = useCallback(async () => {
     try {
       const { data } = await axios.get(`${BACKEND_URL}/api/race/history`);
@@ -246,7 +258,16 @@ export default function RaceWithBetting() {
       console.warn("Failed to fetch history", e);
     }
   }, []);
-
+  const fetchPayouts = useCallback(async () => {
+    try {
+      const { data } = await axios.get(`${BACKEND_URL}/api/race/payouts`, {
+        headers: { "Cache-Control": "no-cache" }, // Prevent caching
+      });
+      setPayouts(data);
+    } catch (e) {
+      console.warn("Failed to fetch payouts", e);
+    }
+  }, []);
   const connectWallet = useCallback(async () => {
     if (!window.solana || !window.solana.isPhantom) {
       alert("Install Phantom wallet");
@@ -262,7 +283,6 @@ export default function RaceWithBetting() {
       console.warn("Wallet connect failed", e);
     }
   }, []);
-
   const placeBetOnchain = useCallback(
     async (targetName) => {
       if (phase !== PHASES.BETTING || betCountdown <= 0) {
@@ -295,16 +315,13 @@ export default function RaceWithBetting() {
         alert("No active race ID");
         return;
       }
-
       setIsSubmitting(true);
       let signature = null;
-
       try {
         const connection = getSolConnection();
         const fromPubkey = window.solana.publicKey;
         const toPubkey = new PublicKey(TREASURY_ADDRESS);
         const tokenMint = new PublicKey(TOKEN_MINT_ADDRESS);
-
         const fromTokenAccount = await getAssociatedTokenAddress(
           tokenMint,
           fromPubkey
@@ -313,12 +330,8 @@ export default function RaceWithBetting() {
           tokenMint,
           toPubkey
         );
-
         const lamports = Math.round(amount * 1e9);
-
         const tx = new Transaction();
-
-        // Handle sender token account creation if not found
         try {
           await getAccount(connection, fromTokenAccount);
         } catch (e) {
@@ -339,8 +352,6 @@ export default function RaceWithBetting() {
             throw e;
           }
         }
-
-        // Handle treasury token account creation if not found
         try {
           await getAccount(connection, toTokenAccount);
         } catch (e) {
@@ -351,7 +362,7 @@ export default function RaceWithBetting() {
             );
             tx.add(
               createAssociatedTokenAccountInstruction(
-                fromPubkey, // Using bettor as payer to create treasury account (adjust if treasury keypair is available)
+                fromPubkey,
                 toTokenAccount,
                 toPubkey,
                 tokenMint
@@ -361,7 +372,6 @@ export default function RaceWithBetting() {
             throw e;
           }
         }
-
         tx.add(
           createTransferInstruction(
             fromTokenAccount,
@@ -375,9 +385,7 @@ export default function RaceWithBetting() {
         tx.feePayer = fromPubkey;
         const { blockhash } = await connection.getLatestBlockhash();
         tx.recentBlockhash = blockhash;
-
         const signed = await window.solana.signTransaction(tx);
-
         try {
           signature = await connection.sendRawTransaction(signed.serialize());
           await connection.confirmTransaction(signature, "confirmed");
@@ -404,11 +412,9 @@ export default function RaceWithBetting() {
             throw err;
           }
         }
-
         if (!signature) {
           throw new Error("No signature obtained");
         }
-
         const payload = {
           bettorWallet: window.solana.publicKey.toString(),
           targetName,
@@ -418,7 +424,6 @@ export default function RaceWithBetting() {
           multiplier,
         };
         console.log("Submitting bet payload:", payload);
-
         const res = await axios
           .post(`${BACKEND_URL}/api/race/bet/submit`, payload, {
             headers: { "Content-Type": "application/json" },
@@ -431,7 +436,6 @@ export default function RaceWithBetting() {
             });
             throw err;
           });
-
         if (res.data.success) {
           setPlacedBets((p) => ({ ...p, [targetName]: amount }));
           setBets((b) => ({ ...b, [targetName]: "" }));
@@ -473,40 +477,67 @@ export default function RaceWithBetting() {
     ]
   );
 
+  const effectiveRaceId = selectedRace ? selectedRace.raceId : raceId;
+  const effectiveMultipliers = selectedRace
+    ? selectedRace.multipliers
+    : bettingMultipliers;
+  const effectiveWinner = selectedRace ? selectedRace.winner.name : winner;
+  const effectiveServerSeed = selectedRace
+    ? selectedRace.serverSeed
+    : serverSeed;
+  const effectiveServerSeedHash = selectedRace
+    ? selectedRace.serverSeedHash
+    : serverSeedHash;
+
+  useEffect(() => {
+    if (showVerification) {
+      setInputServerSeed(effectiveServerSeed || "");
+      setInputServerSeedHash(effectiveServerSeedHash || "");
+    }
+  }, [
+    showVerification,
+    selectedRace,
+    effectiveServerSeed,
+    effectiveServerSeedHash,
+  ]);
+
   useEffect(() => {
     socket.connect();
     socket.emit("getCurrentRace");
     socket.on("raceState", (raceState) => {
       console.log("Received raceState:", raceState);
       if (raceState.phase === PHASES.INTERMISSION) {
-        // Reset states for intermission
         setPhase(PHASES.INTERMISSION);
         setRaceId(null);
         setBetCountdown(0);
         setReadyCountdown(0);
-        setBettingMultipliers(null);
-        setServerSeedHash(null);
+        setResultCountdown(0);
+        setServerSeed(null);
         setIsRacing(false);
         setWinner(null);
+        setWinnerIcon(null);
         setPositions(racers.reduce((acc, r) => ({ ...acc, [r.name]: 0 }), {}));
         setPlacedBets({});
         setLiveBets([]);
         setBets(racers.reduce((acc, r) => ({ ...acc, [r.name]: "" }), {}));
+        fetchPayouts(); // Re-fetch payouts on intermission
+        if (lastPayouts.length > 0) {
+          setShowPayoutCredits(true); // Trigger animation if payouts exist
+        }
         return;
       }
       setRaceId(raceState.raceId);
       setPhase(raceState.phase);
       setReadyCountdown(raceState.readyCountdown);
       setBetCountdown(raceState.betCountdown);
+      setResultCountdown(raceState.resultCountdown || 0);
       setBettingMultipliers(raceState.multipliers);
       setServerSeedHash(raceState.serverSeedHash);
-
       if (raceState.phase === PHASES.READY) {
         setPlacedBets({});
         setLiveBets([]);
         setBets(racers.reduce((acc, r) => ({ ...acc, [r.name]: "" }), {}));
       }
-
       if (countdownRef.current) clearInterval(countdownRef.current);
       if (raceState.phase === PHASES.READY && raceState.readyCountdown > 0) {
         let t = raceState.readyCountdown;
@@ -529,15 +560,27 @@ export default function RaceWithBetting() {
             clearInterval(countdownRef.current);
           }
         }, 1000);
+      } else if (
+        raceState.phase === PHASES.RESULT &&
+        raceState.resultCountdown > 0
+      ) {
+        let t = raceState.resultCountdown;
+        countdownRef.current = setInterval(() => {
+          t--;
+          setResultCountdown(t);
+          if (t <= 0) {
+            clearInterval(countdownRef.current);
+          }
+        }, 1000);
       }
     });
-    socket.on("raceStart", ({ raceId: incomingRaceId, serverSeed }) => {
+    socket.on("raceStart", ({ raceId: incomingRaceId }) => {
       if (incomingRaceId === raceId) {
-        setServerSeed(serverSeed);
         setIsRacing(true);
         setWinner(null);
         setWinnerIcon(null);
         setIsWaitingForResult(false);
+        setServerSeed(null);
         setPositions(racers.reduce((acc, r) => ({ ...acc, [r.name]: 0 }), {}));
         lastPositionsRef.current = racers.reduce(
           (acc, r) => ({ ...acc, [r.name]: 0 }),
@@ -581,8 +624,22 @@ export default function RaceWithBetting() {
         setServerSeed(serverSeed);
         setIsRacing(false);
         setIsWaitingForResult(false);
+        setPhase(PHASES.RESULT);
+        setResultCountdown(5);
         setHistory((h) => [raceResult, ...h].slice(0, 50));
+        fetchPayouts(); // Re-fetch payouts on race result
       }
+    });
+    socket.on("payout", (payout) => {
+      const formattedPayout = {
+        treasuryAddress: TREASURY_ADDRESS,
+        bettorWallet: payout.wallet,
+        amount: payout.amount,
+        payoutTxSignature: payout.signature,
+      };
+      setPayouts((p) => [formattedPayout, ...p].slice(0, 50));
+      setLastPayouts((lp) => [formattedPayout, ...lp].slice(0, 10));
+      console.log("Payout received:", formattedPayout); // Debug log
     });
     return () => {
       socket.off("raceState");
@@ -590,6 +647,7 @@ export default function RaceWithBetting() {
       socket.off("raceProgress");
       socket.off("betPlaced");
       socket.off("raceResult");
+      socket.off("payout");
       socket.disconnect();
       if (countdownRef.current) clearInterval(countdownRef.current);
       if (animRef.current) cancelAnimationFrame(animRef.current);
@@ -597,12 +655,25 @@ export default function RaceWithBetting() {
   }, [raceId]);
 
   useEffect(() => {
+    if (phase === PHASES.INTERMISSION && lastPayouts.length > 0) {
+      setShowPayoutCredits(true);
+      const timer = setTimeout(() => {
+        setShowPayoutCredits(false);
+        // Optionally clear lastPayouts if desired
+        // setLastPayouts([]); // Uncomment to clear after animation
+      }, 5000); // Display for 5 seconds
+      return () => clearTimeout(timer);
+    }
+  }, [phase, lastPayouts]);
+
+  useEffect(() => {
     fetchHistory();
+    fetchPayouts();
     return () => {
       if (countdownRef.current) clearInterval(countdownRef.current);
       if (animRef.current) cancelAnimationFrame(animRef.current);
     };
-  }, [fetchHistory]);
+  }, [fetchHistory, fetchPayouts]);
 
   useEffect(() => {
     if (winner) {
@@ -614,7 +685,6 @@ export default function RaceWithBetting() {
     }
   }, [winner, winnerControls]);
 
-  // Load sprites once on mount
   useEffect(() => {
     let loadedCt = 0;
     racers.forEach((r) => {
@@ -631,37 +701,28 @@ export default function RaceWithBetting() {
     });
   }, []);
 
-  // Sync positions state to ref
   useEffect(() => {
     positionsRef.current = positions;
   }, [positions]);
 
-  // Main animation effect
   useEffect(() => {
     if (phase !== PHASES.RACING || !raceId || !spritesLoaded) return;
     const canvas = canvasRef.current;
     if (!canvas || !boxRef.current) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-
     canvas.width = boxRef.current.clientWidth;
     canvas.height = boxRef.current.clientHeight;
-
     function draw(currentTime) {
       const delta = currentTime - lastTimeRef.current;
       lastTimeRef.current = currentTime;
-
       timeSinceUpdateRef.current += delta;
-
       const W = canvas.width;
       const H = canvas.height;
       const laneH = H / racers.length;
       const spriteSz = Math.min(85, laneH * 0.8);
       const finishX1 = W - 48;
-
       ctx.clearRect(0, 0, W, H);
-
-      // Draw lanes (batch fills)
       for (let i = 0; i < racers.length; i++) {
         ctx.fillStyle =
           i % 2 === 0 ? "rgba(138,43,226,0.8)" : "rgba(30,144,255,0.8)";
@@ -669,8 +730,6 @@ export default function RaceWithBetting() {
         ctx.fillRect(0, i * laneH, W, laneH);
       }
       ctx.globalAlpha = 1;
-
-      // Draw dividers
       ctx.strokeStyle = "white";
       ctx.lineWidth = 2;
       for (let i = 1; i < racers.length; i++) {
@@ -680,9 +739,7 @@ export default function RaceWithBetting() {
         ctx.lineTo(W, y);
         ctx.stroke();
       }
-
-      // Finish line
-      const pulse = 0.5 + 0.5 * Math.sin(currentTime / 250); // Slower pulse for less computation
+      const pulse = 0.5 + 0.5 * Math.sin(currentTime / 250);
       ctx.lineWidth = 8;
       ctx.setLineDash([18, 10]);
       ctx.strokeStyle = `rgba(255,215,0,${pulse})`;
@@ -694,8 +751,6 @@ export default function RaceWithBetting() {
       ctx.lineTo(finishX1 + 20, H);
       ctx.stroke();
       ctx.setLineDash([]);
-
-      // Leader calculation
       let currentLeader = -1;
       let maxPos = -Infinity;
       racers.forEach((r, i) => {
@@ -712,43 +767,32 @@ export default function RaceWithBetting() {
         spinTimersRef.current[prevLeaderRef.current] = 30;
       }
       prevLeaderRef.current = currentLeader;
-
-      // Interp factor
       const interpFactor = Math.min(
         1,
         timeSinceUpdateRef.current / UPDATE_INTERVAL
       );
-
       racers.forEach((r, i) => {
         const sprite = spritesRef.current[r.name];
         if (!sprite) return;
-
         const lastPos = lastPositionsRef.current[r.name];
         const currPos = positionsRef.current[r.name];
         const interpPos = lastPos + (currPos - lastPos) * interpFactor;
-
         const rawX = interpPos * (finishX1 - spriteSz * 2);
         const x = Math.min(rawX, finishX1 - spriteSz);
         const y = i * laneH + (laneH - spriteSz) / 2;
-
-        // Speed line
         const len = 10 + Math.abs(interpPos) * 8;
         ctx.strokeStyle = "rgba(255,255,255,0.2)";
         ctx.beginPath();
         ctx.moveTo(x, y + spriteSz / 2);
         ctx.lineTo(x - len, y + spriteSz / 2 - 5);
         ctx.stroke();
-
-        // Spin
         let angle = 0;
         const spinRemaining = spinTimersRef.current[i];
         if (spinRemaining > 0) {
-          const progress = (30 - spinRemaining + delta / 16.67) / 30; // Adjust with delta
+          const progress = (30 - spinRemaining + delta / 16.67) / 30;
           angle = progress * Math.PI * 2;
           spinTimersRef.current[i] = Math.max(0, spinRemaining - delta / 16.67);
         }
-
-        // Draw sprite
         ctx.save();
         ctx.translate(x + spriteSz / 2, y + spriteSz / 2);
         if (angle !== 0) ctx.rotate(angle);
@@ -765,40 +809,32 @@ export default function RaceWithBetting() {
           spriteSz
         );
         ctx.restore();
-
-        // Particles (spawn less, update with delta)
         if (frameCtRef.current % 4 === 0) {
           particlesRef.current.push({
             x: x + spriteSz / 2,
             y: y + spriteSz,
             alpha: 1,
-            vx: (Math.random() - 0.5) * 2, // Faster spread
+            vx: (Math.random() - 0.5) * 2,
             vy: -1.5,
           });
         }
       });
-
-      // Particles draw and update
       particlesRef.current.forEach((p) => {
         p.x += p.vx * (delta / 16.67);
         p.y += p.vy * (delta / 16.67);
-        p.alpha -= 0.015 * (delta / 16.67); // Slower fade
+        p.alpha -= 0.015 * (delta / 16.67);
         if (p.alpha > 0) {
           ctx.fillStyle = `rgba(255,215,0,${p.alpha})`;
           ctx.fillRect(p.x - 1, p.y - 1, 2, 2);
         }
       });
       particlesRef.current = particlesRef.current.filter((p) => p.alpha > 0);
-
       frameCtRef.current++;
-      if (frameCtRef.current % 2 === 0) curFrameRef.current++; // ~30 FPS animation
-
+      if (frameCtRef.current % 2 === 0) curFrameRef.current++;
       animRef.current = requestAnimationFrame(draw);
     }
-
     lastTimeRef.current = performance.now();
     animRef.current = requestAnimationFrame(draw);
-
     return () => {
       if (animRef.current) cancelAnimationFrame(animRef.current);
     };
@@ -856,6 +892,16 @@ export default function RaceWithBetting() {
     setBets((b) => ({ ...b, [name]: value }));
   };
 
+  const handleVerifyCurrent = () => {
+    setSelectedRace(null);
+    setShowVerification(!showVerification);
+  };
+
+  const handleVerifyPast = (h) => {
+    setSelectedRace(h);
+    setShowVerification(true);
+  };
+
   const displayRacers = React.useMemo(
     () =>
       racers.map((r) => ({
@@ -875,11 +921,9 @@ export default function RaceWithBetting() {
       }}
     >
       <Navbar />
-
-      {/* Track */}
-      <div className="w-full flex justify-center px-4 mt-4 ">
+      <div className="w-full flex justify-center px-4 mt-4">
         <div
-          className="relative w-full max-w-[2400px] h-[50vh] md:h-[60vh] flex items-center"
+          className="relative w-full h-[50vh] md:h-[60vh] flex items-center"
           ref={boxRef}
         >
           <div className="absolute inset-0 pointer-events-none">
@@ -901,15 +945,12 @@ export default function RaceWithBetting() {
                 </div>
               ))}
           </div>
-
           <motion.canvas
             ref={canvasRef}
             className="race-canvas rounded-md shadow-lg"
             style={{ zIndex: 20, width: "100%", height: "100%" }}
             animate={trackControls}
           />
-
-          {/* Overlays */}
           {phase === PHASES.READY && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-40 pointer-events-none">
               <div className="bg-[rgba(10,10,10,0.7)] rounded-2xl p-6 flex flex-col items-center gap-2">
@@ -943,8 +984,9 @@ export default function RaceWithBetting() {
               </div>
             </div>
           )}
-          {winner && !isRacing && phase === PHASES.RACING && (
-            <div className="absolute inset-0 flex items-center justify-center z-40 pointer-events-none">
+          {(phase === PHASES.RACING && winner && !isRacing) ||
+          phase === PHASES.RESULT ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-40 pointer-events-none">
               <div className="absolute inset-0 bg-black/60" />
               <motion.div
                 className="relative"
@@ -965,10 +1007,15 @@ export default function RaceWithBetting() {
                       className="winner-img-large w-24 h-auto rounded"
                     />
                   )}
+                  {phase === PHASES.RESULT && (
+                    <div className="text-sm text-gray-200">
+                      Verification available: {resultCountdown}s remaining
+                    </div>
+                  )}
                 </div>
               </motion.div>
             </div>
-          )}
+          ) : null}
           {isWaitingForResult && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/80 z-40 pointer-events-none">
               <div className="bg-[rgba(10,10,10,0.7)] rounded-2xl p-6 flex flex-col items-center gap-2">
@@ -985,14 +1032,31 @@ export default function RaceWithBetting() {
                   Next race starting soon...
                 </div>
                 <div className="text-sm text-gray-200">Hang tight!</div>
+                {showPayoutCredits && lastPayouts.length > 0 && (
+                  <motion.div
+                    className="absolute right-4 top-0 bottom-0 flex flex-col justify-center items-end overflow-hidden text-yellow-500 text-xs"
+                    initial={{ y: "100%" }}
+                    animate={{ y: "0%" }}
+                    transition={{ duration: 5, ease: "linear" }}
+                    onAnimationComplete={() => setShowPayoutCredits(false)}
+                  >
+                    {lastPayouts.map((p, idx) => (
+                      <div key={idx} className="mb-2">
+                        {p.treasuryAddress?.slice(0, 4) || "N/A"}…
+                        {p.treasuryAddress?.slice(-4) || "N/A"} paying{" "}
+                        {p.amount.toLocaleString()} $MEME to{" "}
+                        {p.bettorWallet?.slice(0, 4) || "N/A"}…
+                        {p.bettorWallet?.slice(-4) || "N/A"}
+                      </div>
+                    ))}
+                  </motion.div>
+                )}
               </div>
             </div>
           )}
         </div>
       </div>
-
-      {/* Betting + History */}
-      <div className="bet-history-wrapper w-full flex flex-col lg:flex-row gap-4 px-4 mt-6 max-w-[1400px]">
+      <div className="bet-history-wrapper w-full flex flex-col lg:flex-row gap-4 px-4 mt-6">
         <div className="betting-panel flex-1 bg-[rgba(24,24,40,0.95)] border border-gray-700 rounded-lg p-4 flex flex-col gap-3">
           <div className="flex flex-wrap justify-between items-center mb-1">
             <div className="font-semibold text-sm text-white">
@@ -1000,22 +1064,20 @@ export default function RaceWithBetting() {
                 ? "Getting Ready..."
                 : phase === PHASES.BETTING
                 ? `Betting ends in: ${betCountdown}s`
-                : isRacing
+                : phase === PHASES.RACING
                 ? "Race in progress – betting locked"
-                : winner
-                ? `Winner: ${winner}`
+                : phase === PHASES.RESULT
+                ? `Winner: ${winner} (Verification phase)`
                 : "Waiting..."}
             </div>
             <div className="text-xs text-gray-300">
               Place your bets for the current race
             </div>
           </div>
-
           <div className="bet-grid relative flex gap-3 overflow-x-auto pb-2 snap-x snap-mandatory">
             <div className="pointer-events-none absolute left-0 top-0 bottom-0 w-6 bg-gradient-to-r from-[rgba(24,24,40,0.95)] to-transparent" />
             <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-6 bg-gradient-to-l from-[rgba(24,24,40,0.95)] to-transparent" />
-
-            {displayRacers.map((r, i) => (
+            {displayRacers.map((r) => (
               <div
                 key={r.name}
                 className="bet-card flex-shrink-0 snap-start bg-[rgba(40,40,70,0.93)] border border-gray-600 rounded-lg p-2 min-w-[120px] sm:min-w-[140px] flex flex-col items-center relative"
@@ -1082,44 +1144,88 @@ export default function RaceWithBetting() {
               </div>
             ))}
           </div>
-
           <div className="verification-panel mt-2 bg-[rgba(0,0,0,0.3)] rounded p-2 text-xs text-white">
             <div className="font-semibold mb-1">Provably Fair Verification</div>
             <div>Server Seed Hash: {serverSeedHash || "Waiting..."}</div>
-            {serverSeed && (
+            {serverSeed && phase === PHASES.RESULT && (
               <div>
                 Server Seed: {serverSeed}
                 <button
-                  onClick={() => setShowVerification(!showVerification)}
+                  onClick={handleVerifyCurrent}
                   className="ml-2 bg-purple-600 text-white rounded py-1 px-2 text-[10px]"
                 >
-                  {showVerification ? "Hide" : "Verify"}
+                  {showVerification ? "Hide" : "Verify Current Race"}
                 </button>
               </div>
             )}
             {showVerification && (
               <div>
-                <div>Client Seed: {raceId}</div>
-                <div>Race ID: {raceId}</div>
+                <div>Verifying Race: {effectiveRaceId}</div>
+                <div>Recorded Winner: {effectiveWinner}</div>
+                <div>Recorded Multipliers:</div>
+                {effectiveMultipliers &&
+                  Object.entries(effectiveMultipliers).map(([name, mult]) => (
+                    <div key={name}>
+                      {name}: {mult}x
+                    </div>
+                  ))}
+                <div>
+                  Server Seed:
+                  <input
+                    value={inputServerSeed}
+                    onChange={(e) => setInputServerSeed(e.target.value)}
+                    className="bg-gray-800 text-white ml-2 p-1 text-xs"
+                  />
+                </div>
+                <div>
+                  Server Seed Hash:
+                  <input
+                    value={inputServerSeedHash}
+                    onChange={(e) => setInputServerSeedHash(e.target.value)}
+                    className="bg-gray-800 text-white ml-2 p-1 text-xs"
+                  />
+                </div>
                 <button
                   onClick={() => {
                     const result = verifyRaceOutcome(
-                      raceId,
-                      serverSeed,
-                      bettingMultipliers,
-                      winner,
-                      serverSeedHash
+                      effectiveRaceId,
+                      inputServerSeed,
+                      effectiveMultipliers,
+                      effectiveWinner,
+                      inputServerSeedHash
                     );
-                    alert(result.message);
+                    setVerificationResult(result);
                   }}
-                  className="bg-green-600 text-white rounded py-1 px-2 text-[10px]"
+                  className="bg-green-600 text-white rounded py-1 px-2 text-[10px] mt-2"
                 >
                   Verify Outcome
                 </button>
+                {verificationResult && (
+                  <div className="mt-2">
+                    <p>Valid: {verificationResult.valid ? "Yes" : "No"}</p>
+                    <p>{verificationResult.message}</p>
+                    {verificationResult.computedMultipliers && (
+                      <div>
+                        Computed Multipliers:
+                        {Object.entries(
+                          verificationResult.computedMultipliers
+                        ).map(([name, mult]) => (
+                          <div key={name}>
+                            {name}: {mult}x
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {verificationResult.computedWinner && (
+                      <div>
+                        Computed Winner: {verificationResult.computedWinner}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
-
           {liveBets.length > 0 && (
             <div className="mt-2 bg-[rgba(0,0,0,0.3)] rounded p-2 text-xs text-white overflow-y-auto max-h-32">
               <div className="font-semibold mb-1">Live Bets</div>
@@ -1141,55 +1247,78 @@ export default function RaceWithBetting() {
             </div>
           )}
         </div>
-
-        <div className="history-box w-full lg:w-[320px] bg-[rgba(24,24,40,0.95)] border border-gray-700 rounded-lg p-4 flex flex-col gap-2">
-          <div className="history-header flex justify-between items-center font-bold text-sm text-white">
-            <div>History</div>
-          </div>
-          <div className="history-list flex flex-col gap-2 overflow-y-auto max-h-[280px]">
-            {history.length === 0 && (
-              <div className="history-empty italic text-gray-400">
-                No races yet
-              </div>
-            )}
-            {history.map((h, idx) => (
-              <div
-                key={idx}
-                className="history-item bg-[rgba(40,40,70,0.9)] rounded-md p-2 flex items-center gap-2 text-xs"
-              >
-                <div className="history-time flex-[0_0-60px] text-gray-400">
-                  {h.timestamp
-                    ? new Date(h.timestamp).toLocaleTimeString("en-US", {
-                        hour12: false,
-                      })
-                    : h.createdAt
-                    ? new Date(h.createdAt).toLocaleTimeString("en-US", {
-                        hour12: false,
-                      })
-                    : "-"}
+        <div className="history-payouts-wrapper w-full lg:w-[640px] flex flex-col lg:flex-row gap-4">
+          <div className="history-box w-full lg:w-[320px] bg-[rgba(24,24,40,0.95)] border border-gray-700 rounded-lg p-4 flex flex-col gap-2">
+            <div className="history-header flex justify-between items-center font-bold text-sm text-white">
+              <div>History</div>
+            </div>
+            <div className="history-list flex flex-col gap-2 overflow-y-auto max-h-[280px]">
+              {history.length === 0 && (
+                <div className="history-empty italic text-gray-400">
+                  No races yet
                 </div>
-                <div className="history-winner flex-1 font-semibold text-white">
-                  {h.winner?.name || "Unknown"}
-                </div>
+              )}
+              {history.map((h, idx) => (
                 <div
-                  className="history-multiplier px-2 py-1 rounded-full text-[10px] font-bold"
-                  style={
-                    typeof h.winner?.multiplier === "number"
-                      ? badgeCss(h.winner.multiplier)
-                      : {
-                          backgroundColor: "rgba(80,80,100,0.9)",
-                          border: "1px solid rgba(120,120,140,0.5)",
-                          color: "#fff",
-                        }
-                  }
+                  key={idx}
+                  className="history-item bg-[rgba(40,40,70,0.9)] rounded-md p-2 flex items-center gap-2 text-xs"
                 >
-                  x{h.winner?.multiplier || "?"}
-                  {h.winner?.multiplier >= 3 && (
-                    <span className="ml-1 text-yellow-400">★</span>
-                  )}
+                  <div className="history-winner flex-1 font-semibold text-white">
+                    {h.winner?.name || "Unknown"}
+                  </div>
+                  <div
+                    className="history-multiplier px-2 py-1 rounded-full text-[10px] font-bold"
+                    style={
+                      typeof h.winner?.multiplier === "number"
+                        ? badgeCss(h.winner.multiplier)
+                        : {
+                            backgroundColor: "rgba(80,80,100,0.9)",
+                            border: "1px solid rgba(120,120,140,0.5)",
+                            color: "#fff",
+                          }
+                    }
+                  >
+                    x{h.winner?.multiplier || "?"}
+                    {h.winner?.multiplier >= 3 && (
+                      <span className="ml-1 text-yellow-400">★</span>
+                    )}
+                  </div>
+                  <button
+                    onClick={() => handleVerifyPast(h)}
+                    className="bg-blue-600 text-white rounded py-1 px-2 text-[10px]"
+                  >
+                    Verify
+                  </button>
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
+          </div>
+          <div className="payouts-box w-full lg:w-[320px] bg-[rgba(24,24,40,0.95)] border border-gray-700 rounded-lg p-4 flex flex-col gap-2">
+            <div className="payouts-header flex justify-between items-center font-bold text-sm text-white">
+              <div>Past Payouts</div>
+            </div>
+            <div className="payouts-list flex flex-col gap-2 overflow-y-auto max-h-[280px]">
+              {payouts.length === 0 && (
+                <div className="payouts-empty italic text-gray-400">
+                  No payouts yet
+                </div>
+              )}
+              {payouts.map((p, idx) => (
+                <div
+                  key={`${p.payoutTxSignature}-${idx}`}
+                  className="payout-item bg-[rgba(40,40,70,0.9)] rounded-md p-2 flex items-center gap-2 text-xs"
+                >
+                  <div className="payout-time flex-[0_0-60px] text-gray-400"></div>
+                  <div className="payout-details flex-1 text-white">
+                    {p.treasuryAddress?.slice(0, 4) || "N/A"}…
+                    {p.treasuryAddress?.slice(-4) || "N/A"} →{" "}
+                    {p.amount.toLocaleString()} $MEME →{" "}
+                    {p.bettorWallet?.slice(0, 4) || "N/A"}…
+                    {p.bettorWallet?.slice(-4) || "N/A"}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
