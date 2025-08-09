@@ -206,7 +206,7 @@ export default function RaceWithBetting() {
   const [laneHeights, setLaneHeights] = useState([]);
   const [history, setHistory] = useState([]);
   const [payouts, setPayouts] = useState([]);
-  const [lastPayouts, setLastPayouts] = useState([]); // For displaying in intermission
+  const [currentRacePayouts, setCurrentRacePayouts] = useState([]); // For current round winners
   const [showPayoutCredits, setShowPayoutCredits] = useState(false); // Control credits animation
   const [isRacing, setIsRacing] = useState(false);
   const [liveBets, setLiveBets] = useState([]);
@@ -244,12 +244,14 @@ export default function RaceWithBetting() {
   const particlesRef = useRef([]);
   const lastTimeRef = useRef(performance.now());
   const UPDATE_INTERVAL = 1000 / 60;
+
   const getSolConnection = () => {
     if (!solConnectionRef.current) {
       solConnectionRef.current = new Connection(SOLANA_RPC_URL, "confirmed");
     }
     return solConnectionRef.current;
   };
+
   const fetchHistory = useCallback(async () => {
     try {
       const { data } = await axios.get(`${BACKEND_URL}/api/race/history`);
@@ -258,16 +260,16 @@ export default function RaceWithBetting() {
       console.warn("Failed to fetch history", e);
     }
   }, []);
+
   const fetchPayouts = useCallback(async () => {
     try {
-      const { data } = await axios.get(`${BACKEND_URL}/api/race/payouts`, {
-        headers: { "Cache-Control": "no-cache" }, // Prevent caching
-      });
+      const { data } = await axios.get(`${BACKEND_URL}/api/race/payouts`);
       setPayouts(data);
     } catch (e) {
       console.warn("Failed to fetch payouts", e);
     }
   }, []);
+
   const connectWallet = useCallback(async () => {
     if (!window.solana || !window.solana.isPhantom) {
       alert("Install Phantom wallet");
@@ -283,6 +285,7 @@ export default function RaceWithBetting() {
       console.warn("Wallet connect failed", e);
     }
   }, []);
+
   const placeBetOnchain = useCallback(
     async (targetName) => {
       if (phase !== PHASES.BETTING || betCountdown <= 0) {
@@ -520,9 +523,8 @@ export default function RaceWithBetting() {
         setPlacedBets({});
         setLiveBets([]);
         setBets(racers.reduce((acc, r) => ({ ...acc, [r.name]: "" }), {}));
-        fetchPayouts(); // Re-fetch payouts on intermission
-        if (lastPayouts.length > 0) {
-          setShowPayoutCredits(true); // Trigger animation if payouts exist
+        if (currentRacePayouts.length > 0) {
+          setShowPayoutCredits(true); // Trigger animation
         }
         return;
       }
@@ -537,6 +539,7 @@ export default function RaceWithBetting() {
         setPlacedBets({});
         setLiveBets([]);
         setBets(racers.reduce((acc, r) => ({ ...acc, [r.name]: "" }), {}));
+        setCurrentRacePayouts([]); // Clear for new race
       }
       if (countdownRef.current) clearInterval(countdownRef.current);
       if (raceState.phase === PHASES.READY && raceState.readyCountdown > 0) {
@@ -624,10 +627,9 @@ export default function RaceWithBetting() {
         setServerSeed(serverSeed);
         setIsRacing(false);
         setIsWaitingForResult(false);
-        setPhase(PHASES.RESULT);
-        setResultCountdown(5);
+        setPhase(PHASES.RESULT); // Transition to result phase
+        setResultCountdown(5); // Set 5 seconds for result phase
         setHistory((h) => [raceResult, ...h].slice(0, 50));
-        fetchPayouts(); // Re-fetch payouts on race result
       }
     });
     socket.on("payout", (payout) => {
@@ -638,7 +640,7 @@ export default function RaceWithBetting() {
         payoutTxSignature: payout.signature,
       };
       setPayouts((p) => [formattedPayout, ...p].slice(0, 50));
-      setLastPayouts((lp) => [formattedPayout, ...lp].slice(0, 10));
+      setCurrentRacePayouts((crp) => [...crp, formattedPayout]); // Accumulate all payouts for current race
       console.log("Payout received:", formattedPayout); // Debug log
     });
     return () => {
@@ -655,18 +657,18 @@ export default function RaceWithBetting() {
   }, [raceId]);
 
   useEffect(() => {
-    if (phase === PHASES.INTERMISSION && lastPayouts.length > 0) {
+    if (phase === PHASES.INTERMISSION && currentRacePayouts.length > 0) {
       setShowPayoutCredits(true);
       const timer = setTimeout(() => {
         setShowPayoutCredits(false);
-        // Optionally clear lastPayouts if desired
-        // setLastPayouts([]); // Uncomment to clear after animation
+        setCurrentRacePayouts([]); // Clear after display
       }, 5000); // Display for 5 seconds
       return () => clearTimeout(timer);
     }
-  }, [phase, lastPayouts]);
+  }, [phase, currentRacePayouts]);
 
   useEffect(() => {
+    // Fetch data on every mount to ensure latest payouts
     fetchHistory();
     fetchPayouts();
     return () => {
@@ -1032,15 +1034,15 @@ export default function RaceWithBetting() {
                   Next race starting soon...
                 </div>
                 <div className="text-sm text-gray-200">Hang tight!</div>
-                {showPayoutCredits && lastPayouts.length > 0 && (
+                {showPayoutCredits && currentRacePayouts.length > 0 && (
                   <motion.div
-                    className="absolute right-4 top-0 bottom-0 flex flex-col justify-center items-end overflow-hidden text-yellow-500 text-xs"
+                    className="absolute right-4 top-0 bottom-0 flex flex-col justify-center items-end overflow-hidden text-white text-xs"
                     initial={{ y: "100%" }}
                     animate={{ y: "0%" }}
                     transition={{ duration: 5, ease: "linear" }}
                     onAnimationComplete={() => setShowPayoutCredits(false)}
                   >
-                    {lastPayouts.map((p, idx) => (
+                    {currentRacePayouts.map((p, idx) => (
                       <div key={idx} className="mb-2">
                         {p.treasuryAddress?.slice(0, 4) || "N/A"}…
                         {p.treasuryAddress?.slice(-4) || "N/A"} paying{" "}
